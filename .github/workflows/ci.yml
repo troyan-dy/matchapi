@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  version:
+    # A pull request into master is a release once merged, so it must carry a new version
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Check that the version is bumped and has a changelog entry
+        run: |
+          version=$(uv version --short)
+          base=$(git show "origin/${{ github.base_ref }}:pyproject.toml" | sed -n 's/^version = "\(.*\)"/\1/p')
+          echo "base ${base}, this branch ${version}"
+          test "${version}" != "${base}" || { echo "bump the version in pyproject.toml"; exit 1; }
+          grep -q "^## \[${version}\]" CHANGELOG.md || { echo "add a CHANGELOG.md entry for ${version}"; exit 1; }
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      - run: uv run pytest --cov --cov-report=term

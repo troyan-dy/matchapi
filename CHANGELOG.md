@@ -1,0 +1,18 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and the project adheres to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-10-12
+
+### Added
+
+- `Request`: method, path, `route` as `(method, *segments)`, query, headers, body and `json()`; built by hand in
+  tests.
+- `Response`, `HTTPError` and `respond()`: the rules that turn a handler's return value into a response.
+- `app(handle)`: the handler as an ASGI application, with `app.wsgi` for WSGI servers; sync and async handlers.
+- The `matchapi` command: `matchapi app` serves the module's `handle` with uvicorn; `--host`, `--port`,
+  `--workers`, `--reload`.
