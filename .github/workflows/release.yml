@@ -1,0 +1,73 @@
+name: Release
+
+# Every push to master releases the version in pyproject.toml. The version job of CI makes sure a pull request
+# bumps it; a version that is tagged already fails here.
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # the tags tell which versions are released
+      - uses: astral-sh/setup-uv@v6
+      - id: version
+        name: Check that the version is not released yet
+        run: |
+          version=$(uv version --short)
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "v${version} is tagged already: bump the version in pyproject.toml"; exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - run: uv sync --locked
+      - run: uv run pytest --cov
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/matchapi/
+    permissions:
+      id-token: write  # PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true  # a rerun after a failed tag job does not upload twice
+
+  tag:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag the release and publish the notes from CHANGELOG.md
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}" -m "matchapi ${VERSION}"
+          git push origin "v${VERSION}"
+          awk -v v="$VERSION" '/^## \[/{p = index($0, "[" v "]") > 0; next} /^\[/{p = 0} p' CHANGELOG.md > notes.md
+          gh release create "v${VERSION}" --verify-tag --title "matchapi ${VERSION}" --notes-file notes.md
