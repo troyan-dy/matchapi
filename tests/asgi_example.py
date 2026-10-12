@@ -4,4 +4,3 @@ from sample import handle
 import matchapi
 
 app = matchapi.app(handle)  # uvicorn asgi:app
-wsgi = app.wsgi  # gunicorn asgi:wsgi

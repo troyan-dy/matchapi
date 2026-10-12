@@ -123,8 +123,8 @@ strings for the cases where a plain comparison reads better.
 | `body` | `bytes`, read in full before the call | `b'{"name": "bob"}'` |
 | `json()` | the body as JSON; a broken body is a 400 | `{"name": "bob"}` |
 
-There is no `scope`, `environ` or stream underneath: the body is read before the handler runs, so a sync handler
-needs no `await` and the same function runs under ASGI and WSGI. `Request("POST", "/users", body=b"...")`
+There is no `scope` or stream underneath: the body is read before the handler runs, so a sync handler needs no
+`await`. `Request("POST", "/users", body=b"...")`
 builds one by hand, which is how a test calls the handler; `query` takes the raw string or a dict.
 
 ### The return value is the response
@@ -155,14 +155,10 @@ together with the method and path. Nothing of the exception reaches the client.
 
 ### Sync or async, the same way
 
-`def handle(req)` and `async def handle(req)` are both fine. Under ASGI a sync handler runs in a thread pool and an
-async one in the event loop. The kind of handler is read from the result of a call, not from the function, so a
-`functools.partial`, a callable object or a compiled function all work, and a sync function that returns a
-coroutine from some branches is awaited on those.
-
-Under WSGI a sync handler runs inline. An async one runs in an event loop of its own for the request, which is fine
-for a handler without loop-bound state (an `httpx.AsyncClient` or a connection pool created at import would not
-survive between requests); async iterable bodies need ASGI. A WSGI server is the natural home of sync handlers.
+`def handle(req)` and `async def handle(req)` are both fine. A sync handler runs in a thread pool, an async one in
+the event loop; both are served by the same uvicorn. The kind of handler is read from the result of a call, not
+from the function, so a `functools.partial`, a callable object or a compiled function all work, and a sync
+function that returns a coroutine from some branches is awaited on those.
 
 ## Running
 
@@ -179,22 +175,19 @@ Without `:function`, the command takes `handle`, and if there is none, the only 
 The server is uvicorn, the one dependency of the package. `--workers` and `--reload` make every process load the
 module itself.
 
-For a server of your own, `matchapi.app(handle)` is an ASGI application and its `wsgi` method a WSGI one. gunicorn
-accepts only a name after the colon, so the module binds the method to one:
+For a server of your own, `matchapi.app(handle)` is an ASGI application:
 
 ```python
 # asgi.py
 import matchapi
 from app import handle
 
-app = matchapi.app(handle)  # uvicorn asgi:app
-wsgi = app.wsgi  # gunicorn asgi:wsgi
+app = matchapi.app(handle)
 ```
 
 ```console
 $ uvicorn asgi:app
 $ granian --interface asgi asgi:app
-$ gunicorn asgi:wsgi
 ```
 
 ## Testing
@@ -285,8 +278,8 @@ return Response(200, (chunk for chunk in lines()))
 ## What matchapi does not do
 
 No router or decorators, no middleware stack, no parameter conversion from type hints, no OpenAPI, no cookies or
-sessions, no templates, no static files, no websockets, no streaming request bodies. Each of these is either a
-few lines in the handler or a job for an ASGI middleware wrapped around `matchapi.app(handle)`.
+sessions, no templates, no static files, no websockets, no streaming request bodies, no WSGI. Each of these is
+either a few lines in the handler or a job for an ASGI middleware wrapped around `matchapi.app(handle)`.
 
 The line is deliberate. The framework fits in one file of about 300 lines that reads in half an hour, and the
 handler stays a function that works without it.
@@ -295,7 +288,7 @@ handler stays a function that works without it.
 
 The decisions and the alternatives that were rejected are in [docs/design.md](docs/design.md): why the router
 went instead of the signature magic, why there is a command rather than an `app = ...` line, why the body is read
-before the call, why ASGI is the entry point and WSGI a method, and why there is no compiled core.
+before the call, why there is only ASGI, and why there is no compiled core.
 
 ## Development
 

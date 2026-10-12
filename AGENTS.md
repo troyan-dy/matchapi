@@ -8,7 +8,7 @@ rejected alternatives before proposing a feature.
 
 - **One function, no registration.** No decorators, no route tables, no dependency markers, no middleware stack. A
   feature that can be written in a few lines inside the handler becomes a recipe in the README, not an API.
-- **Transport-free contract.** `Request` and `Response` are plain data; nothing from ASGI or WSGI leaks into
+- **Transport-free contract.** `Request` and `Response` are plain data; nothing from ASGI leaks into
   them, so a test builds a `Request` by hand and a native runtime could implement the contract later.
 - **One file.** `src/matchapi/__init__.py` holds everything; it stays a few hundred lines. uvicorn is the only
   dependency and the core never imports it.

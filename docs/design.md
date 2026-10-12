@@ -36,8 +36,8 @@ everywhere; making `path` a list was considered and rejected as a surprise.
 ### D3. The request body is read before the handler runs
 
 `req.body` is `bytes` and `req.json()` is a plain method, no `await`. The cost is streaming request bodies, which
-the niche does not need. The gains: a sync handler works everywhere, the same function runs under ASGI and WSGI,
-and a `Request` is constructed by hand in a test with no transport underneath.
+the niche does not need. The gains: a sync handler needs no `await`, and a `Request` is constructed by hand in a
+test with no transport underneath.
 
 ### D4. The return value is the response
 
@@ -55,13 +55,17 @@ framework. `matchapi.app(handle)` remains for a server of one's own.
 Rejected: a loader entry point (`uvicorn matchapi:app` plus an environment variable) as the documented way, too
 odd a command line; a bundled stdlib HTTP server, see above.
 
-### D6. ASGI is `__call__`, WSGI is a method
+### D6. ASGI only, through uvicorn
 
-The first implementation distinguished ASGI from WSGI by the number of arguments in one sync `__call__`. uvicorn
-and hypercorn decide ASGI2 versus ASGI3 by whether `__call__` is a coroutine function, so a sync `__call__` was
-wrapped as ASGI2 and failed at the first request (caught by the end-to-end test). Hence `async def __call__`
-for ASGI and `app.wsgi(environ, start_response)` for WSGI. gunicorn accepts only a name or a call after the colon
-in its import string, so the documented WSGI module binds `wsgi = app.wsgi` and runs `gunicorn asgi:wsgi`.
+Sync handlers run in uvicorn's thread pool, so one server covers both kinds of handler and the user never chooses
+one. A WSGI entry point existed in the first draft and was removed: it doubled the adapter code, it needed its own
+rules for async handlers (a loop per request, a refusal inside a running loop, no async iterable bodies), and the
+documented `gunicorn 'asgi:app.wsgi'` did not even work, since gunicorn accepts only a name after the colon.
+Nobody runs these services under gunicorn; uvicorn is there anyway.
+
+A note from the draft, for whoever brings WSGI back: uvicorn and hypercorn decide ASGI2 versus ASGI3 by whether
+`__call__` is a coroutine function, so a sync `__call__` that dispatched on the number of arguments was wrapped
+as ASGI2 and failed at the first request. `App.__call__` is `async def` for that reason.
 
 ### D7. Sync or async is read from the result, not from the function
 
@@ -71,10 +75,7 @@ remembers to skip the thread next time; every result is still checked, so a sync
 from one branch and a plain value from another works. `iscoroutinefunction` only seeds the fast path for a plain
 `async def`. A handler written in any language that produces a Python callable works.
 
-The body of a response may be an async iterable under ASGI; under WSGI that is a logged 500, since there is no
-loop to drive it from. An async handler under WSGI gets a loop of its own per request, and is refused with a
-logged 500 when the WSGI callable is itself invoked inside a running loop, instead of leaking an un-awaited
-coroutine.
+The body of a response may be a sync or an async iterable of `bytes`; both stream.
 
 ### D8. No compiled core, no Cython, no Rust in v1
 
@@ -91,14 +92,15 @@ optional wheel without changing user code. It is not built until a `py-spy` prof
 ## Non-goals
 
 Router, decorators, middleware stack, type-hint parameter conversion, OpenAPI, cookies and sessions, templates,
-static files, websockets, streaming request bodies. A request for one of these becomes a recipe in the README if
+static files, websockets, streaming request bodies, WSGI. A request for one of these becomes a recipe in the README if
 it fits in a few lines of handler code, or a pointer to an ASGI middleware around `matchapi.app(handle)`.
 
 ## Open questions
 
 - Repeated query parameters and headers: the dicts keep the last value. A `getlist` may be wanted; not until
   someone asks.
-- `HEAD` requests: the handler sees them as a method of their own; nothing strips the body automatically.
+- `HEAD` requests: the handler sees them as a method of their own; uvicorn strips the body of a `HEAD` response
+  itself, so `case "GET" | "HEAD", "health"` works, but nothing in matchapi does it.
 - `--workers` on Windows and `--reload` with a `module:function` target are covered by uvicorn, not tested here.
 - ASGI `root_path` is not stripped from `path`, so under `uvicorn --root-path /api` the prefix is part of
   `req.route`. Nobody has asked yet.

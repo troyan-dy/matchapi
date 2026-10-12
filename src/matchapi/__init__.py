@@ -59,14 +59,6 @@ def _json(value: object) -> bytes:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
 
 
-def _utf8(value: str) -> str:
-    """PEP 3333 hands the path and query over as latin-1 decoded bytes; the URL is UTF-8."""
-    try:
-        return value.encode("latin-1").decode("utf-8", "surrogateescape")
-    except UnicodeEncodeError:
-        return value
-
-
 class HTTPError(Exception):
     """Raised anywhere in the handler; becomes a JSON `{"detail": ...}` response with the status."""
 
@@ -109,7 +101,7 @@ class Request:
 
 
 class Response:
-    """The response as plain data; a `str` body is text, an iterable of `bytes` streams."""
+    """The response as plain data; a `str` body is text, an iterable or async iterable of `bytes` streams."""
 
     def __init__(
         self,
@@ -175,12 +167,8 @@ def _failed(req: Request, error: BaseException) -> Response:
     return Response(500, "Internal Server Error")
 
 
-async def _await(awaitable: Awaitable[Any]) -> Any:
-    return await awaitable  # asyncio.run() takes a coroutine, not any awaitable
-
-
 class App:
-    """The handler as an ASGI application; `app.wsgi` is the same handler as a WSGI application."""
+    """The handler as an ASGI application."""
 
     def __init__(self, handler: Callable[[Request], Any]) -> None:
         self.handler = handler
@@ -193,24 +181,6 @@ class App:
             if inspect.isawaitable(result):
                 self._async = True
                 result = await result
-            return respond(result)
-        except Exception as error:
-            return _failed(req, error)
-
-    def _respond_sync(self, req: Request) -> Response:
-        try:
-            result = self.handler(req)
-            if inspect.isawaitable(result):
-                try:
-                    asyncio.get_running_loop()
-                except RuntimeError:
-                    result = asyncio.run(_await(result))
-                else:
-                    if inspect.iscoroutine(result):
-                        result.close()
-                    raise RuntimeError(
-                        "an async handler under WSGI cannot run inside a running event loop; serve it as ASGI"
-                    )
             return respond(result)
         except Exception as error:
             return _failed(req, error)
@@ -254,42 +224,6 @@ class App:
                     await send({"type": "http.response.body", "body": b""})
             case "websocket":
                 await send({"type": "websocket.close"})
-
-    def wsgi(self, environ: Mapping[str, Any], start_response: Callable[..., Any]) -> Iterable[bytes]:
-        """The WSGI entry point: `wsgi = matchapi.app(handle).wsgi`, then `gunicorn asgi:wsgi`."""
-        headers = {
-            key[5:].replace("_", "-").lower(): value for key, value in environ.items() if key.startswith("HTTP_")
-        }
-        headers.update(
-            {
-                key.replace("_", "-").lower(): environ[key]
-                for key in ("CONTENT_TYPE", "CONTENT_LENGTH")
-                if environ.get(key)
-            }
-        )
-        req = Request(
-            environ["REQUEST_METHOD"],
-            _utf8(environ.get("PATH_INFO") or "/"),
-            query=_utf8(environ.get("QUERY_STRING", "")),
-            headers=headers,
-        )
-        try:
-            length = environ.get("CONTENT_LENGTH") or ""
-            try:
-                size = int(length) if length else 0
-            except ValueError as error:
-                raise HTTPError(400, f"invalid Content-Length: {length!r}") from error
-            if environ.get("wsgi.input_terminated"):  # a chunked body: the stream ends by itself
-                req.body = environ["wsgi.input"].read()
-            elif size:
-                req.body = environ["wsgi.input"].read(size)
-            response = self._respond_sync(req)
-            if isinstance(response.body, AsyncIterable):
-                raise TypeError("an async iterable body needs ASGI; under WSGI return bytes or a sync iterable")
-        except Exception as error:
-            response = _failed(req, error)
-        start_response(f"{response.status} {_phrase(response.status)}".rstrip(), list(response.headers.items()))
-        return [response.body] if isinstance(response.body, bytes) else response.body  # type: ignore[return-value]
 
 
 def app(handler: Callable[[Request], Any]) -> App:

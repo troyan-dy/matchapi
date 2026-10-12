@@ -1,7 +1,6 @@
 import asyncio
 import functools
 import inspect
-import io
 import json
 import logging
 import os
@@ -12,7 +11,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -62,39 +60,6 @@ async def call_asgi(
     assert rest[-1].get("more_body", False) is False
     response_headers = {key.decode(): value.decode() for key, value in start["headers"]}
     return start["status"], response_headers, b"".join(message.get("body", b"") for message in rest)
-
-
-def call_wsgi(
-    wsgi: Any,
-    method: str,
-    path: str,
-    *,
-    query: str = "",
-    headers: Headers | None = None,
-    content_type: str | None = None,
-    body: bytes = b"",
-) -> tuple[str, Headers, bytes]:
-    environ: dict[str, Any] = {
-        "REQUEST_METHOD": method,
-        "PATH_INFO": path,
-        "QUERY_STRING": query,
-        "wsgi.input": io.BytesIO(body),
-    }
-    if body:
-        environ["CONTENT_LENGTH"] = str(len(body))
-    if content_type:
-        environ["CONTENT_TYPE"] = content_type
-    for key, value in (headers or {}).items():
-        environ["HTTP_" + key.upper().replace("-", "_")] = value
-    started: list[tuple[str, list[tuple[str, str]]]] = []
-
-    def start_response(status: str, response_headers: list[tuple[str, str]], exc_info: Any = None) -> None:
-        started.append((status, response_headers))
-
-    out = b"".join(wsgi(environ, start_response))
-    assert len(started) == 1
-    status, response_headers = started[0]
-    return status, dict(response_headers), out
 
 
 # Request
@@ -213,16 +178,6 @@ async def test_an_async_iterable_body_streams_under_asgi() -> None:
     status, headers, body = await call_asgi(app(lambda req: Response(200, chunks())), "GET", "/")
     assert (status, body) == (200, b"ab")
     assert "content-length" not in headers
-
-
-def test_an_async_iterable_body_is_a_logged_500_under_wsgi(caplog: pytest.LogCaptureFixture) -> None:
-    async def chunks() -> AsyncIterator[bytes]:
-        yield b"a"
-
-    with caplog.at_level(logging.ERROR, logger="matchapi"):
-        status, _, body = call_wsgi(app(lambda req: Response(200, chunks())).wsgi, "GET", "/")
-    assert (status, body) == ("500 Internal Server Error", b"Internal Server Error")
-    assert "async iterable" in caplog.text
 
 
 @pytest.mark.parametrize("value", [0, 1000, Response(99), (1, "x")])
@@ -349,23 +304,6 @@ async def test_a_handler_that_sometimes_returns_a_coroutine() -> None:
     assert (await call_asgi(served, "GET", "/", headers=[(b"authorization", b"x")]))[2] == b"allowed"
 
 
-def test_a_sync_handler_runs_inline_under_wsgi() -> None:
-    def handle(req: Request) -> object:
-        return {"thread": threading.get_ident()}
-
-    _, _, body = call_wsgi(app(handle).wsgi, "GET", "/")
-    assert json.loads(body)["thread"] == threading.get_ident()
-
-
-def test_an_async_handler_runs_under_wsgi() -> None:
-    async def handle(req: Request) -> object:
-        await asyncio.sleep(0)
-        return "async under wsgi"
-
-    status, _, body = call_wsgi(app(handle).wsgi, "GET", "/")
-    assert (status, body) == ("200 OK", b"async under wsgi")
-
-
 # ASGI
 
 
@@ -408,134 +346,6 @@ async def test_asgi_websocket_is_closed() -> None:
 def test_the_app_is_recognised_as_asgi3() -> None:
     # uvicorn and hypercorn wrap an app as ASGI2 unless its __call__ is a coroutine function
     assert inspect.iscoroutinefunction(app(lambda req: None).__call__)
-
-
-# WSGI
-
-
-def test_wsgi_request_fields() -> None:
-    seen: list[Request] = []
-
-    def handle(req: Request) -> object:
-        seen.append(req)
-        return 201, {"ok": True}
-
-    status, headers, body = call_wsgi(
-        app(handle).wsgi,
-        "POST",
-        "/users/42",
-        query="q=x",
-        headers={"X-Token": "t"},
-        content_type="application/json",
-        body=b'{"name": "ann"}',
-    )
-    (req,) = seen
-    assert req.route == ("POST", "users", "42")
-    assert req.query == {"q": "x"}
-    assert req.headers == {"x-token": "t", "content-type": "application/json", "content-length": "15"}
-    assert req.json() == {"name": "ann"}
-    assert (status, headers["content-type"], headers["content-length"], body) == (
-        "201 Created",
-        "application/json",
-        "11",
-        b'{"ok":true}',
-    )
-
-
-def test_wsgi_errors_are_responses_too(caplog: pytest.LogCaptureFixture) -> None:
-    def forbidden(req: Request) -> object:
-        raise HTTPError(403)
-
-    def broken(req: Request) -> object:
-        raise ValueError("boom")
-
-    status, _, body = call_wsgi(app(forbidden).wsgi, "GET", "/")
-    assert (status, json.loads(body)) == ("403 Forbidden", {"detail": "Forbidden"})
-    with caplog.at_level(logging.ERROR, logger="matchapi"):
-        status, _, body = call_wsgi(app(broken).wsgi, "GET", "/x")
-    assert (status, body) == ("500 Internal Server Error", b"Internal Server Error")
-    assert "ValueError: boom" in caplog.text
-
-
-def test_wsgi_decodes_the_path_and_query_as_utf8() -> None:
-    seen: list[Request] = []
-
-    def handle(req: Request) -> object:
-        seen.append(req)
-        return None
-
-    # PEP 3333: the server hands PATH_INFO and QUERY_STRING over as latin-1 decoded bytes
-    path = "/привет".encode().decode("latin-1")
-    query = "q=мир".encode().decode("latin-1")
-    call_wsgi(app(handle).wsgi, "GET", path, query=query)
-    call_wsgi(app(handle).wsgi, "GET", "/日本")  # a server that decoded the path itself: taken as is
-    first, second = seen
-    assert (first.path, first.route, first.query) == ("/привет", ("GET", "привет"), {"q": "мир"})
-    assert second.route == ("GET", "日本")
-
-
-def test_wsgi_reads_a_chunked_body_to_the_end() -> None:
-    seen: list[Request] = []
-
-    def handle(req: Request) -> object:
-        seen.append(req)
-        return None
-
-    environ = {
-        "REQUEST_METHOD": "POST",
-        "PATH_INFO": "/",
-        "wsgi.input": io.BytesIO(b'{"a": 1}'),
-        "wsgi.input_terminated": True,  # gunicorn: a chunked request has no CONTENT_LENGTH, the stream ends by itself
-    }
-    list(app(handle).wsgi(environ, lambda status, headers: None))
-    assert seen[0].json() == {"a": 1}
-
-
-def test_wsgi_rejects_a_broken_content_length() -> None:
-    environ = {"REQUEST_METHOD": "POST", "PATH_INFO": "/", "wsgi.input": io.BytesIO(b""), "CONTENT_LENGTH": "abc"}
-    started: list[str] = []
-    body = b"".join(app(lambda req: "ok").wsgi(environ, lambda status, headers: started.append(status)))
-    assert (started, json.loads(body)) == (["400 Bad Request"], {"detail": "invalid Content-Length: 'abc'"})
-
-
-def test_an_async_handler_under_wsgi_inside_a_running_loop_is_a_logged_500(caplog: pytest.LogCaptureFixture) -> None:
-    async def handle(req: Request) -> object:
-        return "unreachable"
-
-    class Awaitable:  # an awaitable that is not a coroutine, so there is nothing to close
-        def __await__(self) -> Any:
-            yield from ()
-
-    def handle_future(req: Request) -> object:
-        return Awaitable()
-
-    async def inside_a_loop() -> list[tuple[str, bytes]]:
-        return [call_wsgi(app(handler).wsgi, "GET", "/")[::2] for handler in (handle, handle_future)]
-
-    with caplog.at_level(logging.ERROR, logger="matchapi"), warnings.catch_warnings():
-        warnings.simplefilter("error")  # no "coroutine was never awaited"
-        assert asyncio.run(inside_a_loop()) == [("500 Internal Server Error", b"Internal Server Error")] * 2
-    assert "running event loop" in caplog.text
-    assert caplog.text.count("GET / failed") == 2
-
-
-def test_wsgi_status_line_of_an_unknown_status_has_no_trailing_space() -> None:
-    status, _, _ = call_wsgi(app(lambda req: 499).wsgi, "GET", "/")
-    assert status == "499"
-
-
-def test_wsgi_streams_an_iterable_body() -> None:
-    status, headers, body = call_wsgi(app(lambda req: Response(200, iter([b"a", b"b"]))).wsgi, "GET", "/")
-    assert (status, body) == ("200 OK", b"ab")
-    assert "content-length" not in headers
-
-
-def test_the_readme_wsgi_module_works_with_gunicorn_import_rules() -> None:
-    # gunicorn accepts only a name or a call after the colon, so the README binds `wsgi = ...` at module level
-    import asgi_example
-
-    assert asgi_example.wsgi.__self__.handler is asgi_example.handle  # type: ignore[attr-defined]
-    assert inspect.iscoroutinefunction(asgi_example.app.__call__)
 
 
 def test_the_readme_app_is_the_tested_sample() -> None:
