@@ -22,6 +22,7 @@ of this checkout. One worker, granian's defaults otherwise, so every framework g
 $ uv run bench/run.py                 # HTTP/1.1, 10 s per server and request, 64 connections
 $ uv run bench/run.py --http2         # the same over HTTP/2 (h2c)
 $ uv run bench/run.py -z 3s -c 16     # a quick look
+$ uv run bench/chart.py               # the README's chart, docs/bench.svg, from the HTTP/1.1 table below
 ```
 
 Needs [oha](https://github.com/hatoo/oha) and `uv` on the PATH. The bench is not part of CI: the numbers below

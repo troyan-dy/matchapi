@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="320"
+  viewBox="-10 0 880 320" role="img" aria-labelledby="t d" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title id="t">Requests per second over HTTP/1.1, one granian worker</title>
+<desc id="d">matchapi serves 43,055 GET and 23,439 POST requests per second, level with a bare RSGI
+application and ahead of Emmett, BlackSheep, Starlette, Litestar and FastAPI under the same granian.</desc>
+<style>
+  svg { --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781; --grid: #e1e0d9;
+        --axis: #c3c2b7; --accent: #2a78d6; --other: #b5b3ab; }
+  @media (prefers-color-scheme: dark) {
+    svg { --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a;
+          --axis: #383835; --accent: #3987e5; --other: #5e5d58; }
+  }
+  .bg { fill: var(--surface); }
+  .title { fill: var(--ink); font-size: 15px; font-weight: 600; }
+  .sub { fill: var(--muted); font-size: 12px; }
+  .head { fill: var(--ink); font-size: 13px; font-weight: 600; font-family: ui-monospace, Menlo, monospace; }
+  .grid { stroke: var(--grid); stroke-width: 1; }
+  .axis { stroke: var(--axis); stroke-width: 1; }
+  .tick { fill: var(--muted); font-size: 11px; text-anchor: middle; }
+  .name { fill: var(--ink-2); font-size: 12.5px; text-anchor: end; }
+  .name.accent, .value.accent { fill: var(--ink); font-weight: 600; }
+  .value { fill: var(--ink-2); font-size: 12px; }
+  .bar.accent { fill: var(--accent); }
+  .bar.other { fill: var(--other); }
+  .ceiling { stroke: var(--ink-2); stroke-width: 1.5; }
+  .mark { fill: var(--ink-2); font-size: 11px; text-anchor: end; }
+</style>
+<rect class="bg" x="-10" width="880" height="320" rx="8"/>
+<text class="title" x="0" y="22">Requests per second, HTTP/1.1, one granian worker</text>
+<g>
+<text class="head" x="0" y="48">GET /users/42</text>
+<line class="grid" x1="96.0" x2="96.0" y1="72" y2="258"/>
+<text class="tick" x="96.0" y="274">0k</text>
+<line class="grid" x1="148.0" x2="148.0" y1="72" y2="258"/>
+<text class="tick" x="148.0" y="274">10k</text>
+<line class="grid" x1="200.0" x2="200.0" y1="72" y2="258"/>
+<text class="tick" x="200.0" y="274">20k</text>
+<line class="grid" x1="252.0" x2="252.0" y1="72" y2="258"/>
+<text class="tick" x="252.0" y="274">30k</text>
+<line class="grid" x1="304.0" x2="304.0" y1="72" y2="258"/>
+<text class="tick" x="304.0" y="274">40k</text>
+<line class="grid" x1="356.0" x2="356.0" y1="72" y2="258"/>
+<text class="tick" x="356.0" y="274">50k</text>
+<text class="name accent" x="86" y="97.5">matchapi</text>
+<path class="bar accent" d="M96.0,84.0h219.9a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-219.9z"><title>matchapi: 43,055 req/s</title></path>
+<text class="value accent" x="325.9" y="97.5">43,055</text>
+<text class="name other" x="86" y="127.5">BlackSheep</text>
+<path class="bar other" d="M96.0,114.0h171.7a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-171.7z"><title>BlackSheep: 33,794 req/s</title></path>
+<text class="value other" x="277.7" y="127.5">33,794</text>
+<text class="name other" x="86" y="157.5">Starlette</text>
+<path class="bar other" d="M96.0,144.0h153.1a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-153.1z"><title>Starlette: 30,206 req/s</title></path>
+<text class="value other" x="259.1" y="157.5">30,206</text>
+<text class="name other" x="86" y="187.5">Emmett</text>
+<path class="bar other" d="M96.0,174.0h152.7a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-152.7z"><title>Emmett: 30,135 req/s</title></path>
+<text class="value other" x="258.7" y="187.5">30,135</text>
+<text class="name other" x="86" y="217.5">Litestar</text>
+<path class="bar other" d="M96.0,204.0h120.7a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-120.7z"><title>Litestar: 23,974 req/s</title></path>
+<text class="value other" x="226.7" y="217.5">23,974</text>
+<text class="name other" x="86" y="247.5">FastAPI</text>
+<path class="bar other" d="M96.0,234.0h68.5a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-68.5z"><title>FastAPI: 13,940 req/s</title></path>
+<text class="value other" x="174.5" y="247.5">13,940</text>
+<line class="ceiling" x1="319.6" x2="319.6" y1="66" y2="258"/>
+<text class="mark" x="319.6" y="62">bare RSGI 42,993</text>
+<line class="axis" x1="96" x2="96" y1="72" y2="258"/>
+<text class="head" x="460" y="48">POST /users</text>
+<line class="grid" x1="556.0" x2="556.0" y1="72" y2="258"/>
+<text class="tick" x="556.0" y="274">0k</text>
+<line class="grid" x1="608.0" x2="608.0" y1="72" y2="258"/>
+<text class="tick" x="608.0" y="274">10k</text>
+<line class="grid" x1="660.0" x2="660.0" y1="72" y2="258"/>
+<text class="tick" x="660.0" y="274">20k</text>
+<line class="grid" x1="712.0" x2="712.0" y1="72" y2="258"/>
+<text class="tick" x="712.0" y="274">30k</text>
+<line class="grid" x1="764.0" x2="764.0" y1="72" y2="258"/>
+<text class="tick" x="764.0" y="274">40k</text>
+<line class="grid" x1="816.0" x2="816.0" y1="72" y2="258"/>
+<text class="tick" x="816.0" y="274">50k</text>
+<text class="name accent" x="546" y="97.5">matchapi</text>
+<path class="bar accent" d="M556.0,84.0h117.9a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-117.9z"><title>matchapi: 23,439 req/s</title></path>
+<text class="value accent" x="683.9" y="97.5">23,439</text>
+<text class="name other" x="546" y="127.5">Emmett</text>
+<path class="bar other" d="M556.0,114.0h87.4a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-87.4z"><title>Emmett: 17,574 req/s</title></path>
+<text class="value other" x="653.4" y="127.5">17,574</text>
+<text class="name other" x="546" y="157.5">BlackSheep</text>
+<path class="bar other" d="M556.0,144.0h68.2a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-68.2z"><title>BlackSheep: 13,878 req/s</title></path>
+<text class="value other" x="634.2" y="157.5">13,878</text>
+<text class="name other" x="546" y="187.5">Starlette</text>
+<path class="bar other" d="M556.0,174.0h64.0a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-64.0z"><title>Starlette: 13,071 req/s</title></path>
+<text class="value other" x="630.0" y="187.5">13,071</text>
+<text class="name other" x="546" y="217.5">Litestar</text>
+<path class="bar other" d="M556.0,204.0h57.8a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-57.8z"><title>Litestar: 11,878 req/s</title></path>
+<text class="value other" x="623.8" y="217.5">11,878</text>
+<text class="name other" x="546" y="247.5">FastAPI</text>
+<path class="bar other" d="M556.0,234.0h40.2a4.0,4.0 0 0 1 4.0,4.0v10.0a4.0,4.0 0 0 1 -4.0,4.0h-40.2z"><title>FastAPI: 8,501 req/s</title></path>
+<text class="value other" x="606.2" y="247.5">8,501</text>
+<line class="ceiling" x1="683.0" x2="683.0" y1="66" y2="258"/>
+<text class="mark" x="683.0" y="62">bare RSGI 24,432</text>
+<line class="axis" x1="556" x2="556" y1="72" y2="258"/>
+</g>
+<text class="sub" x="0" y="308">bench/README.md · Python 3.14, granian 2.8.4, oha with 64 connections · higher is better</text>
+</svg>

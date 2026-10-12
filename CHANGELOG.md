@@ -27,6 +27,9 @@ the same granian (`bench/`).
 - `bench/` runs Emmett, BlackSheep, Starlette, Litestar and FastAPI, pinned, under the same granian next to
   matchapi, a `POST` with a JSON body, and `--http2`. The previous matchapi from PyPI replaces 0.1.0 under
   uvicorn.
+- The README opens with the measured numbers: a Performance section with the HTTP/1.1 table and a chart,
+  `docs/bench.svg`, drawn from `bench/README.md` by `bench/chart.py`; badges for coverage, `mypy --strict`, Ruff,
+  the one dependency and the one file.
 
 ## [0.2.1] - 2026-10-12
 
