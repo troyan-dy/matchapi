@@ -6,6 +6,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-12
+
+Package metadata only; the code is unchanged.
+
+### Changed
+
+- The PyPI description, keywords and classifiers name granian and RSGI, so the package is found by the stack it
+  runs on. The README opens with the same line.
+
 ## [0.2.0] - 2026-10-12
 
 The handler is decorated and granian serves it. The framework loses its command line and its ASGI adapter;
