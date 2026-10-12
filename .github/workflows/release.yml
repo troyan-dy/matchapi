@@ -29,7 +29,7 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
       - run: uv sync --locked
-      - run: uv run pytest
+      - run: uv run pytest --cov
       - run: uv build
       - uses: actions/upload-artifact@v4
         with:
@@ -50,6 +50,8 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true  # a rerun after a failed tag job does not upload twice
 
   tag:
     needs: [build, publish]
@@ -67,5 +69,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "v${VERSION}" -m "matchapi ${VERSION}"
           git push origin "v${VERSION}"
-          awk -v v="$VERSION" '/^## \[/{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > notes.md
+          awk -v v="$VERSION" '/^## \[/{p = index($0, "[" v "]") > 0; next} /^\[/{p = 0} p' CHANGELOG.md > notes.md
           gh release create "v${VERSION}" --verify-tag --title "matchapi ${VERSION}" --notes-file notes.md

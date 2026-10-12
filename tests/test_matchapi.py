@@ -12,16 +12,33 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable
+import warnings
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 import matchapi
-from matchapi import HTTPError, Request, Response, app, respond
+from matchapi import HTTPError, Request, Response, app
 
 Headers = dict[str, str]
+
+
+def channel(
+    *messages: dict[str, Any],
+) -> tuple[Callable[[], Awaitable[Any]], Callable[[Any], Awaitable[None]], list[Any]]:
+    """ASGI `receive` that yields the messages and `send` that records into the returned list."""
+    received = iter(messages)
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return next(received)
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    return receive, send, sent
 
 
 async def call_asgi(
@@ -37,15 +54,7 @@ async def call_asgi(
     scope = {"type": "http", "method": method, "path": path, "query_string": query, "headers": list(headers)}
     messages = [{"type": "http.request", "body": chunk, "more_body": True} for chunk in (chunks or [body])]
     messages[-1]["more_body"] = False
-    received = iter(messages)
-    sent: list[dict[str, Any]] = []
-
-    async def receive() -> dict[str, Any]:
-        return next(received)
-
-    async def send(message: dict[str, Any]) -> None:
-        sent.append(message)
-
+    receive, send, sent = channel(*messages)
     await asgi(scope, receive, send)
     start, *rest = sent
     assert start["type"] == "http.response.start"
@@ -129,11 +138,12 @@ def test_json_of_a_broken_body_is_a_400() -> None:
 
 def test_the_sample_service_matches_on_route() -> None:
     async def run() -> None:
-        from sample import handle
+        import sample
 
+        handle: Callable[[Request], Awaitable[Any]] = sample.handle
         assert await handle(Request("GET", "/ping")) == "pong"
-        assert await handle(Request("GET", "/users/42")) == {"id": 42}
-        assert await handle(Request("POST", "/users", body=b'{"name": "ann"}')) == (201, {"name": "ann"})
+        assert await handle(Request("GET", "/users/42")) == {"id": 42, "name": "ann"}
+        assert await handle(Request("POST", "/users", body=b'{"name": "bob"}')) == (201, {"id": 7, "name": "bob"})
         assert await handle(Request("DELETE", "/users/42")) == 404
 
     asyncio.run(run())
@@ -143,43 +153,46 @@ def test_the_sample_service_matches_on_route() -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "status", "content_type", "body"),
+    ("value", "status", "content_type", "body", "length"),
     [
-        (None, 204, None, b""),
-        (404, 404, "text/plain; charset=utf-8", b"Not Found"),
-        ("pong", 200, "text/plain; charset=utf-8", b"pong"),
-        ("привет", 200, "text/plain; charset=utf-8", "привет".encode()),
-        (b"\x00\x01", 200, "application/octet-stream", b"\x00\x01"),
-        ({"id": 1, "name": "ann"}, 200, "application/json", b'{"id":1,"name":"ann"}'),
-        ([1, 2], 200, "application/json", b"[1,2]"),
-        ((201, {"id": 1}), 201, "application/json", b'{"id":1}'),
-        ((202, None), 202, None, b""),
-        (Response(418, b"tea", {"content-type": "text/x-tea"}), 418, "text/x-tea", b"tea"),
-        (Response(200, "text"), 200, "text/plain; charset=utf-8", b"text"),
+        (None, 204, None, b"", None),
+        (404, 404, "text/plain; charset=utf-8", b"Not Found", "9"),
+        (204, 204, None, b"", None),
+        (304, 304, None, b"", None),
+        (100, 100, None, b"", None),
+        (499, 499, "text/plain; charset=utf-8", b"", "0"),
+        ("pong", 200, "text/plain; charset=utf-8", b"pong", "4"),
+        ("привет", 200, "text/plain; charset=utf-8", "привет".encode(), "12"),
+        (b"\x00\x01", 200, "application/octet-stream", b"\x00\x01", "2"),
+        (b"", 200, "application/octet-stream", b"", "0"),
+        ({"id": 1, "name": "ann"}, 200, "application/json", b'{"id":1,"name":"ann"}', "21"),
+        ({"name": "имя"}, 200, "application/json", '{"name":"имя"}'.encode(), "17"),
+        ([1, 2], 200, "application/json", b"[1,2]", "5"),
+        ((201, {"id": 1}), 201, "application/json", b'{"id":1}', "8"),
+        ((202, None), 202, None, b"", "0"),
+        (Response(418, b"tea", {"content-type": "text/x-tea"}), 418, "text/x-tea", b"tea", "3"),
+        (Response(200, "text"), 200, "text/plain; charset=utf-8", b"text", "4"),
     ],
 )
 async def test_return_value_becomes_the_response(
-    value: object, status: int, content_type: str | None, body: bytes
+    value: object, status: int, content_type: str | None, body: bytes, length: str | None
 ) -> None:
     got_status, headers, got_body = await call_asgi(app(lambda req: value), "GET", "/")
     assert (got_status, headers.get("content-type"), got_body) == (status, content_type, body)
-    assert headers.get("content-length") == (str(len(body)) if body else None)
-
-
-def test_respond_is_the_same_rule_for_a_test() -> None:
-    response = respond((302, None, {"Location": "/"}))
-    assert (response.status, response.headers, response.body) == (302, {"location": "/"}, b"")
-
-
-async def test_an_unknown_status_has_no_phrase() -> None:
-    status, _, body = await call_asgi(app(lambda req: 499), "GET", "/")
-    assert (status, body) == (499, b"")
+    assert headers.get("content-length") == length
 
 
 async def test_a_tuple_with_headers() -> None:
     status, headers, body = await call_asgi(app(lambda req: (201, "made", {"X-Id": "7"})), "GET", "/")
     assert (status, headers["x-id"], body) == (201, "7", b"made")
     assert headers["content-type"] == "text/plain; charset=utf-8"
+
+
+async def test_a_tuple_does_not_change_a_shared_response() -> None:
+    not_found = Response(404, "nf")  # a module-level constant in a real service
+    status, headers, body = await call_asgi(app(lambda req: (410, not_found, {"x-gone": "1"})), "GET", "/")
+    assert (status, headers["x-gone"], body) == (410, "1", b"nf")
+    assert (not_found.status, "x-gone" in not_found.headers) == (404, False)
 
 
 async def test_an_iterable_body_streams() -> None:
@@ -192,12 +205,63 @@ async def test_an_iterable_body_streams() -> None:
     assert "content-length" not in headers
 
 
+async def test_an_async_iterable_body_streams_under_asgi() -> None:
+    async def chunks() -> AsyncIterator[bytes]:
+        yield b"a"
+        yield b"b"
+
+    status, headers, body = await call_asgi(app(lambda req: Response(200, chunks())), "GET", "/")
+    assert (status, body) == (200, b"ab")
+    assert "content-length" not in headers
+
+
+def test_an_async_iterable_body_is_a_logged_500_under_wsgi(caplog: pytest.LogCaptureFixture) -> None:
+    async def chunks() -> AsyncIterator[bytes]:
+        yield b"a"
+
+    with caplog.at_level(logging.ERROR, logger="matchapi"):
+        status, _, body = call_wsgi(app(lambda req: Response(200, chunks())).wsgi, "GET", "/")
+    assert (status, body) == ("500 Internal Server Error", b"Internal Server Error")
+    assert "async iterable" in caplog.text
+
+
+@pytest.mark.parametrize("value", [0, 1000, Response(99), (1, "x")])
+async def test_an_impossible_status_is_a_logged_500(value: object, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.ERROR, logger="matchapi"):
+        status, _, _ = await call_asgi(app(lambda req: value), "GET", "/")
+    assert status == 500
+    assert "status" in caplog.text
+
+
+async def test_a_disconnect_while_reading_the_body_sends_nothing() -> None:
+    seen: list[Request] = []
+
+    def handle(req: Request) -> object:
+        seen.append(req)
+        return "never"
+
+    scope = {"type": "http", "method": "POST", "path": "/", "query_string": b"", "headers": []}
+    receive, send, sent = channel(
+        {"type": "http.request", "body": b"{", "more_body": True}, {"type": "http.disconnect"}
+    )
+    await app(handle)(scope, receive, send)
+    assert (seen, sent) == ([], [])
+
+
 async def test_http_error_is_a_json_detail() -> None:
     def handle(req: Request) -> object:
         raise HTTPError(403, "no")
 
     status, headers, body = await call_asgi(app(handle), "GET", "/")
     assert (status, headers["content-type"], json.loads(body)) == (403, "application/json", {"detail": "no"})
+
+
+async def test_http_error_with_a_bodyless_status_has_no_body() -> None:
+    def handle(req: Request) -> object:
+        raise HTTPError(304)
+
+    status, headers, body = await call_asgi(app(handle), "GET", "/")
+    assert (status, headers, body) == (304, {}, b"")
 
 
 async def test_http_error_detail_defaults_to_the_phrase() -> None:
@@ -217,6 +281,13 @@ async def test_any_other_exception_is_a_logged_500(caplog: pytest.LogCaptureFixt
     assert (status, headers["content-type"], body) == (500, "text/plain; charset=utf-8", b"Internal Server Error")
     assert "ValueError: boom" in caplog.text
     assert "GET /x" in caplog.text
+
+
+async def test_a_header_outside_latin1_is_a_logged_500(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.ERROR, logger="matchapi"):
+        status, _, _ = await call_asgi(app(lambda req: (302, None, {"location": "/привет"})), "GET", "/")
+    assert status == 500
+    assert "location" in caplog.text
 
 
 @pytest.mark.parametrize("value", [object(), True, (1, 2, 3, 4), ("200", "x")])
@@ -265,6 +336,19 @@ async def test_any_callable_that_returns_an_awaitable_works() -> None:
         assert body == expected
 
 
+async def test_a_handler_that_sometimes_returns_a_coroutine() -> None:
+    async def allowed(req: Request) -> object:
+        return "allowed"
+
+    def handle(req: Request) -> object:
+        return allowed(req) if "authorization" in req.headers else 401
+
+    served = app(handle)
+    assert (await call_asgi(served, "GET", "/", headers=[(b"authorization", b"x")]))[2] == b"allowed"
+    assert (await call_asgi(served, "GET", "/"))[0] == 401
+    assert (await call_asgi(served, "GET", "/", headers=[(b"authorization", b"x")]))[2] == b"allowed"
+
+
 def test_a_sync_handler_runs_inline_under_wsgi() -> None:
     def handle(req: Request) -> object:
         return {"thread": threading.get_ident()}
@@ -308,29 +392,16 @@ async def test_asgi_request_fields() -> None:
 
 
 async def test_asgi_lifespan_completes() -> None:
-    received = iter([{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
-    sent: list[dict[str, Any]] = []
-
-    async def receive() -> dict[str, Any]:
-        return next(received)
-
-    async def send(message: dict[str, Any]) -> None:
-        sent.append(message)
-
+    receive, send, sent = channel({"type": "lifespan.startup"}, {"type": "lifespan.shutdown"})
     await app(lambda req: None)({"type": "lifespan"}, receive, send)
     assert sent == [{"type": "lifespan.startup.complete"}, {"type": "lifespan.shutdown.complete"}]
 
 
 async def test_asgi_websocket_is_closed() -> None:
-    sent: list[dict[str, Any]] = []
-
-    async def receive() -> dict[str, Any]:
-        return {"type": "websocket.connect"}
-
-    async def send(message: dict[str, Any]) -> None:
-        sent.append(message)
-
+    receive, send, sent = channel({"type": "websocket.connect"})
     await app(lambda req: None)({"type": "websocket", "path": "/"}, receive, send)
+    assert sent == [{"type": "websocket.close"}]
+    await app(lambda req: None)({"type": "http.something.new"}, receive, send)
     assert sent == [{"type": "websocket.close"}]
 
 
@@ -386,10 +457,91 @@ def test_wsgi_errors_are_responses_too(caplog: pytest.LogCaptureFixture) -> None
     assert "ValueError: boom" in caplog.text
 
 
+def test_wsgi_decodes_the_path_and_query_as_utf8() -> None:
+    seen: list[Request] = []
+
+    def handle(req: Request) -> object:
+        seen.append(req)
+        return None
+
+    # PEP 3333: the server hands PATH_INFO and QUERY_STRING over as latin-1 decoded bytes
+    path = "/привет".encode().decode("latin-1")
+    query = "q=мир".encode().decode("latin-1")
+    call_wsgi(app(handle).wsgi, "GET", path, query=query)
+    call_wsgi(app(handle).wsgi, "GET", "/日本")  # a server that decoded the path itself: taken as is
+    first, second = seen
+    assert (first.path, first.route, first.query) == ("/привет", ("GET", "привет"), {"q": "мир"})
+    assert second.route == ("GET", "日本")
+
+
+def test_wsgi_reads_a_chunked_body_to_the_end() -> None:
+    seen: list[Request] = []
+
+    def handle(req: Request) -> object:
+        seen.append(req)
+        return None
+
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/",
+        "wsgi.input": io.BytesIO(b'{"a": 1}'),
+        "wsgi.input_terminated": True,  # gunicorn: a chunked request has no CONTENT_LENGTH, the stream ends by itself
+    }
+    list(app(handle).wsgi(environ, lambda status, headers: None))
+    assert seen[0].json() == {"a": 1}
+
+
+def test_wsgi_rejects_a_broken_content_length() -> None:
+    environ = {"REQUEST_METHOD": "POST", "PATH_INFO": "/", "wsgi.input": io.BytesIO(b""), "CONTENT_LENGTH": "abc"}
+    started: list[str] = []
+    body = b"".join(app(lambda req: "ok").wsgi(environ, lambda status, headers: started.append(status)))
+    assert (started, json.loads(body)) == (["400 Bad Request"], {"detail": "invalid Content-Length: 'abc'"})
+
+
+def test_an_async_handler_under_wsgi_inside_a_running_loop_is_a_logged_500(caplog: pytest.LogCaptureFixture) -> None:
+    async def handle(req: Request) -> object:
+        return "unreachable"
+
+    class Awaitable:  # an awaitable that is not a coroutine, so there is nothing to close
+        def __await__(self) -> Any:
+            yield from ()
+
+    def handle_future(req: Request) -> object:
+        return Awaitable()
+
+    async def inside_a_loop() -> list[tuple[str, bytes]]:
+        return [call_wsgi(app(handler).wsgi, "GET", "/")[::2] for handler in (handle, handle_future)]
+
+    with caplog.at_level(logging.ERROR, logger="matchapi"), warnings.catch_warnings():
+        warnings.simplefilter("error")  # no "coroutine was never awaited"
+        assert asyncio.run(inside_a_loop()) == [("500 Internal Server Error", b"Internal Server Error")] * 2
+    assert "running event loop" in caplog.text
+    assert caplog.text.count("GET / failed") == 2
+
+
+def test_wsgi_status_line_of_an_unknown_status_has_no_trailing_space() -> None:
+    status, _, _ = call_wsgi(app(lambda req: 499).wsgi, "GET", "/")
+    assert status == "499"
+
+
 def test_wsgi_streams_an_iterable_body() -> None:
     status, headers, body = call_wsgi(app(lambda req: Response(200, iter([b"a", b"b"]))).wsgi, "GET", "/")
     assert (status, body) == ("200 OK", b"ab")
     assert "content-length" not in headers
+
+
+def test_the_readme_wsgi_module_works_with_gunicorn_import_rules() -> None:
+    # gunicorn accepts only a name or a call after the colon, so the README binds `wsgi = ...` at module level
+    import asgi_example
+
+    assert asgi_example.wsgi.__self__.handler is asgi_example.handle  # type: ignore[attr-defined]
+    assert inspect.iscoroutinefunction(asgi_example.app.__call__)
+
+
+def test_the_readme_app_is_the_tested_sample() -> None:
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    block = readme.split("```python\n# app.py\n", 1)[1].split("```", 1)[0]
+    assert block == (Path(__file__).resolve().parent / "sample.py").read_text()
 
 
 # The command
@@ -473,6 +625,18 @@ def test_the_command_explains_a_missing_handler(
 def test_the_command_explains_a_missing_module(modules: Callable[[str, str], str], uvicorn_run: list[Any]) -> None:
     with pytest.raises(SystemExit, match="No module named 'nowhere'"):
         matchapi.main(["nowhere"])
+    with pytest.raises(SystemExit, match=r"No module named 'nowhere'.*drop the \.py"):
+        matchapi.main(["nowhere.py"])
+    with pytest.raises(SystemExit, match="module:function"):
+        matchapi.main([":handle"])
+
+
+def test_an_import_error_inside_the_module_is_the_users_traceback(
+    modules: Callable[[str, str], str], uvicorn_run: list[Any]
+) -> None:
+    name = modules("needs", "import no_such_library\n\ndef handle(req): ...\n")
+    with pytest.raises(ModuleNotFoundError, match="no_such_library"):
+        matchapi.main([name])
 
 
 def test_workers_and_reload_go_through_a_factory(
@@ -518,7 +682,7 @@ def test_the_command_serves_over_http() -> None:
             f"{base}/users", data=b'{"name": "ann"}', headers={"Content-Type": "application/json"}, method="POST"
         )
         with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310
-            assert (response.status, json.loads(response.read())) == (201, {"name": "ann"})
+            assert (response.status, json.loads(response.read())) == (201, {"id": 7, "name": "ann"})
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(f"{base}/nothing", timeout=5)  # noqa: S310
         assert (error.value.code, error.value.read()) == (404, b"Not Found")

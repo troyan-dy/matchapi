@@ -68,6 +68,11 @@ ignore = ["S101"]
 files = ["src", "tests"]
 strict = true
 
+[[tool.mypy.overrides]]
+# The app of the README, verbatim: it imports nothing and has no annotations
+module = "sample"
+disallow_untyped_defs = false
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

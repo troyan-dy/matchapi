@@ -16,3 +16,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 - `app(handle)`: the handler as an ASGI application, with `app.wsgi` for WSGI servers; sync and async handlers.
 - The `matchapi` command: `matchapi app` serves the module's `handle` with uvicorn; `--host`, `--port`,
   `--workers`, `--reload`.
+
+[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/troyan-dy/matchapi/releases/tag/v0.1.0

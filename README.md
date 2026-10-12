@@ -25,6 +25,9 @@ async def handle(req):
 ```console
 $ pip install matchapi
 $ matchapi app
+INFO:     Started server process [62579]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
 ```
 
@@ -35,12 +38,16 @@ $ curl localhost:8000/users/42
 {"id":42,"name":"ann"}
 $ curl -i -X POST localhost:8000/users -d '{"name": "bob"}'
 HTTP/1.1 201 Created
+date: Mon, 12 Oct 2026 00:10:08 GMT
+server: uvicorn
 content-type: application/json
 content-length: 21
 
 {"id":7,"name":"bob"}
 $ curl -i localhost:8000/nothing
 HTTP/1.1 404 Not Found
+date: Mon, 12 Oct 2026 00:10:08 GMT
+server: uvicorn
 content-type: text/plain; charset=utf-8
 content-length: 9
 
@@ -118,7 +125,7 @@ strings for the cases where a plain comparison reads better.
 
 There is no `scope`, `environ` or stream underneath: the body is read before the handler runs, so a sync handler
 needs no `await` and the same function runs under ASGI and WSGI. `Request("POST", "/users", body=b"...")`
-builds one by hand, which is how a test calls the handler.
+builds one by hand, which is how a test calls the handler; `query` takes the raw string or a dict.
 
 ### The return value is the response
 
@@ -127,14 +134,16 @@ builds one by hand, which is how a test calls the handler.
 | `dict` or `list` | 200, `application/json` |
 | `str` | 200, `text/plain; charset=utf-8` |
 | `bytes` | 200, `application/octet-stream` |
-| `int` | that status, the standard phrase as text: `return 404` is `Not Found` |
+| `int` (not `bool`) | that status, the standard phrase as text: `return 404` is `Not Found`; 1xx, 204 and 304 have no body |
 | `None` | 204, no body |
 | `(status, body)` | the body as above with that status: `return 201, {"id": 7}` |
 | `(status, body, headers)` | the same with extra headers: `return 302, None, {"location": "/"}` |
-| `Response(status, body, headers)` | as given; a `str` body is text, an iterable of `bytes` streams |
+| `Response(status, body, headers)` | as given; a `str` body is text, an iterable or async iterable of `bytes` streams |
 
-Anything else is a `TypeError`, which is a 500 with the reason in the log. JSON is compact (`{"id":7}`), so a
-response is exactly what `json.dumps(value, separators=(",", ":"))` gives.
+Anything else, a status outside 100-999 or a header value outside latin-1 is a 500 with the reason in the log.
+JSON is compact and keeps non-ASCII text as is: exactly what
+`json.dumps(value, separators=(",", ":"), ensure_ascii=False)` gives. A `Response` passed in a tuple is copied,
+so a module-level `NOT_FOUND = Response(404, "no")` is safe to reuse.
 
 ### Errors
 
@@ -147,9 +156,13 @@ together with the method and path. Nothing of the exception reaches the client.
 ### Sync or async, the same way
 
 `def handle(req)` and `async def handle(req)` are both fine. Under ASGI a sync handler runs in a thread pool and an
-async one in the event loop. Under WSGI a sync handler runs inline and an async one in a loop of its own. The kind
-of handler is read from the result of a call, not from the function, so a `functools.partial`, a callable object or
-a compiled function all work.
+async one in the event loop. The kind of handler is read from the result of a call, not from the function, so a
+`functools.partial`, a callable object or a compiled function all work, and a sync function that returns a
+coroutine from some branches is awaited on those.
+
+Under WSGI a sync handler runs inline. An async one runs in an event loop of its own for the request, which is fine
+for a handler without loop-bound state (an `httpx.AsyncClient` or a connection pool created at import would not
+survive between requests); async iterable bodies need ASGI. A WSGI server is the natural home of sync handlers.
 
 ## Running
 
@@ -166,20 +179,22 @@ Without `:function`, the command takes `handle`, and if there is none, the only 
 The server is uvicorn, the one dependency of the package. `--workers` and `--reload` make every process load the
 module itself.
 
-For a server of your own, `matchapi.app(handle)` is an ASGI application and its `wsgi` method a WSGI one:
+For a server of your own, `matchapi.app(handle)` is an ASGI application and its `wsgi` method a WSGI one. gunicorn
+accepts only a name after the colon, so the module binds the method to one:
 
 ```python
 # asgi.py
 import matchapi
 from app import handle
 
-app = matchapi.app(handle)
+app = matchapi.app(handle)  # uvicorn asgi:app
+wsgi = app.wsgi  # gunicorn asgi:wsgi
 ```
 
 ```console
 $ uvicorn asgi:app
 $ granian --interface asgi asgi:app
-$ gunicorn 'asgi:app.wsgi'
+$ gunicorn asgi:wsgi
 ```
 
 ## Testing
@@ -273,7 +288,7 @@ No router or decorators, no middleware stack, no parameter conversion from type 
 sessions, no templates, no static files, no websockets, no streaming request bodies. Each of these is either a
 few lines in the handler or a job for an ASGI middleware wrapped around `matchapi.app(handle)`.
 
-The line is deliberate. The framework fits in one file of about 250 lines that reads in half an hour, and the
+The line is deliberate. The framework fits in one file of about 300 lines that reads in half an hour, and the
 handler stays a function that works without it.
 
 ## Design notes

@@ -60,13 +60,21 @@ odd a command line; a bundled stdlib HTTP server, see above.
 The first implementation distinguished ASGI from WSGI by the number of arguments in one sync `__call__`. uvicorn
 and hypercorn decide ASGI2 versus ASGI3 by whether `__call__` is a coroutine function, so a sync `__call__` was
 wrapped as ASGI2 and failed at the first request (caught by the end-to-end test). Hence `async def __call__`
-for ASGI and `app.wsgi(environ, start_response)` for WSGI: `gunicorn 'asgi:app.wsgi'`.
+for ASGI and `app.wsgi(environ, start_response)` for WSGI. gunicorn accepts only a name or a call after the colon
+in its import string, so the documented WSGI module binds `wsgi = app.wsgi` and runs `gunicorn asgi:wsgi`.
 
 ### D7. Sync or async is read from the result, not from the function
 
 `inspect.iscoroutinefunction` is wrong for `functools.partial`, callable objects and functions compiled with
 Cython. The app calls a handler of unknown kind in a thread, and if the result is awaitable, awaits it and
-remembers that the handler is async. A handler written in any language that produces a Python callable works.
+remembers to skip the thread next time; every result is still checked, so a sync handler that returns a coroutine
+from one branch and a plain value from another works. `iscoroutinefunction` only seeds the fast path for a plain
+`async def`. A handler written in any language that produces a Python callable works.
+
+The body of a response may be an async iterable under ASGI; under WSGI that is a logged 500, since there is no
+loop to drive it from. An async handler under WSGI gets a loop of its own per request, and is refused with a
+logged 500 when the WSGI callable is itself invoked inside a running loop, instead of leaking an un-awaited
+coroutine.
 
 ### D8. No compiled core, no Cython, no Rust in v1
 
@@ -92,3 +100,9 @@ it fits in a few lines of handler code, or a pointer to an ASGI middleware aroun
   someone asks.
 - `HEAD` requests: the handler sees them as a method of their own; nothing strips the body automatically.
 - `--workers` on Windows and `--reload` with a `module:function` target are covered by uvicorn, not tested here.
+- ASGI `root_path` is not stripped from `path`, so under `uvicorn --root-path /api` the prefix is part of
+  `req.route`. Nobody has asked yet.
+- The "only public function" rule of the command counts plain functions; a `functools.partial` or a callable
+  object at module level is served by naming it, `matchapi app:service`.
+- The release workflow tags after publishing; if tagging fails, the next run skips the already uploaded files
+  (`skip-existing`) and tags again.
