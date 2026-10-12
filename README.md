@@ -3,6 +3,12 @@
 [![PyPI](https://img.shields.io/pypi/v/matchapi)](https://pypi.org/project/matchapi/)
 [![Python](https://img.shields.io/pypi/pyversions/matchapi)](https://pypi.org/project/matchapi/)
 [![CI](https://github.com/troyan-dy/matchapi/actions/workflows/ci.yml/badge.svg)](https://github.com/troyan-dy/matchapi/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/troyan-dy/matchapi/blob/master/README.md#development)
+[![mypy](https://img.shields.io/badge/mypy-strict-blue)](https://mypy.readthedocs.io/en/stable/command_line.html#cmdoption-mypy-strict)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![HTTP/1.1](https://img.shields.io/badge/HTTP%2F1.1-at%20the%20RSGI%20ceiling-2a78d6)](https://github.com/troyan-dy/matchapi/blob/master/README.md#performance)
+[![Dependencies](https://img.shields.io/badge/dependencies-granian-orange)](https://github.com/emmett-framework/granian)
+[![One file](https://img.shields.io/badge/one%20file-~300%20lines-informational)](https://github.com/troyan-dy/matchapi/blob/master/src/matchapi/__init__.py)
 [![License](https://img.shields.io/pypi/l/matchapi)](LICENSE)
 
 An HTTP service is one function. `match` replaces the router.
@@ -10,6 +16,12 @@ An HTTP service is one function. `match` replaces the router.
 A one-file Python web framework for [granian](https://github.com/emmett-framework/granian) over
 [RSGI](https://github.com/emmett-framework/granian/blob/master/docs/spec/RSGI.md), granian's native Rust-backed
 interface: no router, no middleware, no ASGI adapter. Python 3.11+.
+
+- **Fast.** On HTTP/1.1 within a few percent of a bare RSGI application written by hand, and 1.16 to 3.1 times
+  the requests per second of Emmett, BlackSheep, Starlette, Litestar and FastAPI under the same granian.
+  [Performance](#performance).
+- **Small.** One file of about 300 lines that reads in half an hour, pure Python, one dependency: granian.
+- **Tested.** 100% line and branch coverage, `mypy --strict`, a real granian in the test suite.
 
 ```python
 # app.py
@@ -66,6 +78,7 @@ Not Found
 One import and one decorator; no route table, no schema classes, no dependency markers, no middleware stack. The
 decorated `handle` is still the function it was: a test calls it with a request and compares the return value.
 
+- [Performance](#performance)
 - [Why](#why)
 - [The model](#the-model)
   - [One function](#one-function)
@@ -80,6 +93,29 @@ decorated `handle` is still the function it was: a test calls it with a request 
 - [What matchapi does not do](#what-matchapi-does-not-do)
 - [Design notes](#design-notes)
 - [Development](#development)
+
+## Performance
+
+![Requests per second over HTTP/1.1, one granian worker: matchapi 43,055 on GET /users/42 and 23,439 on POST /users, level with a bare RSGI application; BlackSheep, Starlette, Emmett, Litestar and FastAPI below](https://raw.githubusercontent.com/troyan-dy/matchapi/master/docs/bench.svg)
+
+The README's service, written the way each framework writes it, under the same granian, one worker, `oha` with
+64 connections; the multiplier is how many times matchapi's requests per second:
+
+| Requests/s, HTTP/1.1, higher is better | `GET /ping` | `GET /users/42` | `POST /users` |
+|---|---:|---:|---:|
+| bare RSGI, no framework (the ceiling) | 45,264 | 42,993 | 24,432 |
+| **matchapi** | **45,049** | **43,055** | **23,439** |
+| Emmett 2.8 (RSGI) | 38,733 (1.16×) | 30,135 (1.43×) | 17,574 (1.33×) |
+| BlackSheep 2.6 | 39,000 (1.16×) | 33,794 (1.27×) | 13,878 (1.69×) |
+| Starlette 1.7 | 32,612 (1.38×) | 30,206 (1.43×) | 13,071 (1.79×) |
+| Litestar 2.24 | 26,005 (1.73×) | 23,974 (1.80×) | 11,878 (1.97×) |
+| FastAPI 0.143 | 17,819 (2.53×) | 13,940 (3.09×) | 8,501 (2.76×) |
+
+matchapi parses nothing the handler does not read: `route`, `query` and `headers` are computed on first use, an
+HTTP/1 request without a body is not waited on, and the commonest return values go to granian without an
+intermediate object. Over HTTP/2 every request still awaits its body, and there Emmett and BlackSheep are ahead on
+`GET`. [bench/](bench/) has both protocols, the method and the command that reproduces the tables; one laptop,
+Python 3.14, granian 2.8.4.
 
 ## Why
 
@@ -141,6 +177,11 @@ strings for the cases where a plain comparison reads better.
 There is no scope or stream underneath: the body is read before the handler runs, so a sync handler needs no
 `await`. `Request("POST", "/users", body=b"...")`
 builds one by hand, which is how a test calls the handler; `query` takes the raw string or a dict.
+
+Nothing is parsed that the handler does not read: `route`, `query` and `headers` are computed on first use, and
+an HTTP/1 request without `content-length` or `transfer-encoding` has no body to wait for. On HTTP/1.1
+[bench/](bench/) cannot tell matchapi from a bare RSGI application answering the same routes by hand, and puts
+it ahead of Emmett, BlackSheep, Starlette, Litestar and FastAPI under the same granian.
 
 ### The return value is the response
 
@@ -291,7 +332,7 @@ cookies or sessions, no templates, no static files, no websockets, no streaming 
 Each of these is either a few lines in the handler or not matchapi's job: the server is granian and the only
 interface is RSGI, so there is no middleware layer to plug into.
 
-The line is deliberate. The framework fits in one file of about 200 lines that reads in half an hour, and the
+The line is deliberate. The framework fits in one file of about 300 lines that reads in half an hour, and the
 handler stays a function that works without a server.
 
 ## Design notes
@@ -299,7 +340,7 @@ handler stays a function that works without a server.
 The decisions and the alternatives that were rejected are in [docs/design.md](docs/design.md): why the router
 went instead of the signature magic, why a decorator rather than a command, why the body is read before the
 call, why there is only RSGI through granian, and why there is no compiled core. [CONTEXT.md](CONTEXT.md) is the
-glossary. [bench/](bench/) measures the framework's own share of a request.
+glossary. [bench/](bench/) measures matchapi against a bare RSGI application and against other frameworks.
 
 ## Development
 

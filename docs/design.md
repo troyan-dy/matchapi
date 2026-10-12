@@ -40,12 +40,13 @@ everywhere; making `path` a list was considered and rejected as a surprise.
 the niche does not need. The gains: a sync handler needs no `await`, and a `Request` is constructed by hand in a
 test with no transport underneath.
 
-Under RSGI the read is one `await protocol()` per request, body or no body, and `bench/` shows it is the
-expensive part: on a route that answers from memory it takes about forty percent of the throughput of a bare
-application, more than the rest of matchapi together. Skipping it when no `content-length` or `transfer-encoding` header is
-present was considered and rejected: under HTTP/2 a body arrives without either, and a wrong guess hands the
-handler an empty body for a request that had one. A client that sends no body pays for one await on a channel
-that is already closed.
+Under RSGI the read is one `await protocol()`, and `bench/` shows it is the expensive part: on a route that
+answers from memory it takes about forty percent of the throughput of a bare application, more than the rest of
+matchapi together. So it is skipped when the request cannot have a body: HTTP/1 frames a request body by
+`content-length` or `transfer-encoding` and nothing else (RFC 9112, section 6.3), so an HTTP/1 request with
+neither has none, and `req.body` is `b""` without an await. The version comes from granian's
+`scope.http_version`, not from a guess. HTTP/2 frames the body with DATA frames and neither header, so there the
+read stays unconditional: under HTTP/2 every request pays the await (open questions below).
 
 ### D4. The return value is the response
 
@@ -112,15 +113,29 @@ already, so the stream ends. An exception from the transport, a client that left
 is granian's own and propagates to granian: the core never imports it (D6), so the two are told apart by where
 they come from, the iterator or `send_bytes`, not by type.
 
-### D8. No compiled core, no Cython, no Rust in matchapi
+### D8. No compiled core, no Cython, no Rust, no mypyc in matchapi
 
 Under granian the HTTP parsing, the connection handling and the event loop are Rust already, and JSON is C. The
-framework's own work per request is the `Request` constructor, the `match`, and the response rules: a few
-microseconds, and `bench/` puts it at about ten percent of the throughput of a bare RSGI application that
-reads the body as matchapi does (D3). Compiling the glue would gain a few percent and cost a wheel matrix and the
-"one readable file" property. Compiling the user's `match` function does not help either: its body is `dict`
-and `bytes` operations that are the same C API calls compiled or not. Revisit if the bench ever shows
-matchapi's share growing past the body read.
+framework's own work per request is a `Request` that parses nothing up front, the `match`, and the response
+rules: on HTTP/1.1 `bench/` cannot tell matchapi from a bare RSGI application that answers the same routes by
+hand (D9). There is nothing left for a compiler to win: mypyc speeds up `str` and `dict` code by 1.2 to 1.5
+times, and a few percent of a request at that rate is below the noise of the bench. The cost would be a wheel
+matrix and the "one readable file" property. Compiling the user's `match` function does not help either: its
+body is `dict` and `bytes` operations that are the same C API calls compiled or not. Revisit if the bench ever
+shows matchapi's share of a request growing past the await of the body.
+
+### D9. A request pays for what the handler reads
+
+The measure is `bench/`: the same routes in a bare RSGI application (the ceiling), in matchapi, and in Emmett,
+BlackSheep, Starlette, Litestar and FastAPI, all under the same granian. Three rules keep matchapi at the
+ceiling without changing the handler contract:
+
+- `req.query`, `req.headers` and `req.route` are computed on first read and kept; a handler that matches on the
+  route never parses the query string or copies the headers. A `Request` built by hand is unchanged.
+- The body is not awaited when the request cannot have one (D3).
+- The commonest return values, `str`, `dict`, `list` and `(status, one of those)`, go to the server without a
+  `Response`: `json.dumps` with options builds a new encoder per call, so the encoder is built once, and granian
+  sets `content-length` itself. `respond()` still describes the same response for every value.
 
 ## Non-goals
 
@@ -130,6 +145,12 @@ file responses. A request for one of these becomes a recipe in the README if it 
 code; otherwise it is granian's job or nobody's.
 
 ## Open questions
+
+- HTTP/2 requests await the body even when there is none (D3), and on a route that answers from memory that
+  costs about a third of the throughput; Emmett and BlackSheep read the body only when the handler asks for it
+  and are ahead there. Two ways out, both a change of contract: an awaitable body (`await req.read()`,
+  `await req.json()`), or the signature telling the app whether the handler wants the body at all. The second
+  is per service, not per route, so one `POST` case in the `match` brings the await back to every request.
 
 - Repeated query parameters and headers: the dicts keep the last value. A `getlist` may be wanted; not until
   someone asks.

@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from matchapi import HTTPError, Request, Response, app
+from matchapi import HTTPError, Request, Response, app, respond
 
 Headers = dict[str, str]
 
@@ -28,9 +28,16 @@ class RSGIHeaders(list[tuple[str, str]]):
     def items(self) -> list[tuple[str, str]]:
         return list(self)
 
+    def get(self, key: str) -> str | None:
+        return next((value for name, value in self if name == key), None)
 
-def scope(method: str, path: str, query: str = "", headers: Iterable[tuple[str, str]] = ()) -> Any:
-    return SimpleNamespace(method=method, path=path, query_string=query, headers=RSGIHeaders(headers))
+
+def scope(
+    method: str, path: str, query: str = "", headers: Iterable[tuple[str, str]] = (), http_version: str = "1.1"
+) -> Any:
+    return SimpleNamespace(
+        method=method, path=path, query_string=query, headers=RSGIHeaders(headers), http_version=http_version
+    )
 
 
 class Protocol:
@@ -38,10 +45,15 @@ class Protocol:
 
     def __init__(self, body: bytes = b"") -> None:
         self.body = body
+        self.reads = 0
         self.sent: list[Any] = []
 
     async def __call__(self) -> bytes:
+        self.reads += 1
         return self.body
+
+    def response_str(self, status: int, headers: list[tuple[str, str]], body: str) -> None:
+        self.sent.append((status, headers, body.encode()))
 
     def response_bytes(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
         self.sent.append((status, headers, body))
@@ -63,6 +75,8 @@ async def call_rsgi(
     headers: Iterable[tuple[str, str]] = (),
     body: bytes = b"",
 ) -> tuple[int, Headers, bytes]:
+    if body:  # as an HTTP/1.1 client frames it
+        headers = [*headers, ("content-length", str(len(body)))]
     protocol = Protocol(body)
     await served.__rsgi__(scope(method, path, query, headers), protocol)
     (status, response_headers, whole), *chunks = protocol.sent
@@ -164,6 +178,8 @@ async def test_the_decorated_async_handler_returns_its_coroutine() -> None:
         ({"name": "имя"}, 200, "application/json", '{"name":"имя"}'.encode(), "17"),
         ([1, 2], 200, "application/json", b"[1,2]", "5"),
         ((201, {"id": 1}), 201, "application/json", b'{"id":1}', "8"),
+        ((201, [1]), 201, "application/json", b"[1]", "3"),
+        ((201, "made"), 201, "text/plain; charset=utf-8", b"made", "4"),
         ((202, None), 202, None, b"", "0"),
         (Response(418, b"tea", {"content-type": "text/x-tea"}), 418, "text/x-tea", b"tea", "3"),
         (Response(200, "text"), 200, "text/plain; charset=utf-8", b"text", "4"),
@@ -174,7 +190,7 @@ async def test_return_value_becomes_the_response(
 ) -> None:
     got_status, headers, got_body = await call_rsgi(app(lambda req: value), "GET", "/")
     assert (got_status, headers.get("content-type"), got_body) == (status, content_type, body)
-    assert headers.get("content-length") == length
+    assert respond(value).headers.get("content-length") == length  # on the wire granian sets it when it is absent
 
 
 async def test_a_tuple_with_headers() -> None:
@@ -242,7 +258,7 @@ async def test_a_client_that_leaves_during_a_stream_is_left_to_the_server(caplog
     assert caplog.text == ""  # not the handler's failure: nothing to log here
 
 
-@pytest.mark.parametrize("value", [0, 1000, Response(99), (1, "x")])
+@pytest.mark.parametrize("value", [0, 1000, Response(99), (1, "x"), (1000, {"a": 1}), (99, None)])
 async def test_an_impossible_status_is_a_logged_500(value: object, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.ERROR, logger="matchapi"):
         status, _, _ = await call_rsgi(app(lambda req: value), "GET", "/")
@@ -266,8 +282,33 @@ async def test_a_disconnect_while_reading_the_body_runs_nothing() -> None:
 
     protocol = Gone()
     with pytest.raises(ClosedError):  # left to the server: nobody is listening, and the core does not import granian
-        await app(handle).__rsgi__(scope("POST", "/"), protocol)
+        await app(handle).__rsgi__(scope("POST", "/", headers=[("content-length", "2")]), protocol)
     assert (seen, protocol.sent) == ([], [])
+
+
+@pytest.mark.parametrize(
+    ("http_version", "headers", "reads"),
+    [
+        ("1.1", [], 0),  # RFC 9112, 6.3: no content-length and no transfer-encoding is no body
+        ("1.0", [], 0),
+        ("1.1", [("content-length", "0")], 1),
+        ("1.1", [("content-length", "2")], 1),
+        ("1.1", [("transfer-encoding", "chunked")], 1),
+        ("2", [], 1),  # HTTP/2 frames the body without either header
+    ],
+)
+async def test_the_body_is_awaited_only_when_the_request_can_have_one(
+    http_version: str, headers: list[tuple[str, str]], reads: int
+) -> None:
+    seen: list[bytes] = []
+
+    def handle(req: Request) -> object:
+        seen.append(req.body)
+        return None
+
+    protocol = Protocol(b"{}")
+    await app(handle).__rsgi__(scope("POST", "/", headers=headers, http_version=http_version), protocol)
+    assert (protocol.reads, seen) == (reads, [b"{}" if reads else b""])
 
 
 async def test_http_error_is_a_json_detail() -> None:
@@ -393,8 +434,13 @@ async def test_rsgi_request_fields() -> None:
     (req,) = seen
     assert req.route == ("POST", "users", "42")
     assert req.query == {"q": "x", "limit": "5"}
-    assert req.headers == {"x-token": "u", "content-type": "application/json"}  # a repeated header: last value wins
+    assert req.headers == {  # a repeated header: last value wins
+        "x-token": "u",
+        "content-type": "application/json",
+        "content-length": "15",
+    }
     assert req.json() == {"name": "ann"}
+    assert (req.route is req.route, req.query is req.query, req.headers is req.headers) == (True, True, True)  # once
 
 
 def test_the_readme_app_is_the_tested_sample() -> None:

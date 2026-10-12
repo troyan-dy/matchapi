@@ -6,6 +6,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
+A request pays for what the handler reads. On HTTP/1.1 matchapi serves as many requests as a bare RSGI
+application answering the same routes, and more than Emmett, BlackSheep, Starlette, Litestar and FastAPI under
+the same granian (`bench/`).
+
+### Changed
+
+- An HTTP/1 request without `content-length` or `transfer-encoding` has no body (RFC 9112, section 6.3), so the
+  app no longer awaits one; `req.body` is `b""`. HTTP/2 requests still await the body.
+- `req.route`, `req.query` and `req.headers` are computed on first read and kept. They are read-only properties
+  now: assigning to them raises `AttributeError`.
+- `str`, `dict`, `list` and `(status, one of those)` return values go to granian without a `Response`, and
+  granian sets `content-length`; `respond()` still describes the same response.
+- JSON responses reuse one encoder instead of building one per `json.dumps` call.
+
+### Added
+
+- `bench/` runs Emmett, BlackSheep, Starlette, Litestar and FastAPI, pinned, under the same granian next to
+  matchapi, a `POST` with a JSON body, and `--http2`. The previous matchapi from PyPI replaces 0.1.0 under
+  uvicorn.
+- The README opens with the measured numbers: a Performance section with the HTTP/1.1 table and a chart,
+  `docs/bench.svg`, drawn from `bench/README.md` by `bench/chart.py`; badges for coverage, `mypy --strict`, Ruff,
+  the one dependency and the one file.
+
 ## [0.2.1] - 2026-10-12
 
 Package metadata only; the code is unchanged.
@@ -51,6 +76,8 @@ the handler contract, the request and the response rules are unchanged.
 - The `matchapi` command: `matchapi app` serves the module's `handle` with uvicorn; `--host`, `--port`,
   `--workers`, `--reload`.
 
-[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/troyan-dy/matchapi/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/troyan-dy/matchapi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/troyan-dy/matchapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/troyan-dy/matchapi/releases/tag/v0.1.0
