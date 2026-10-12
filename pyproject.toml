@@ -1,6 +1,6 @@
 [project]
 name = "matchapi"
-version = "0.2.1"
+version = "0.3.0"
 description = "One-function HTTP framework for granian over RSGI: match replaces the router"
 readme = "README.md"
 license = "MIT"

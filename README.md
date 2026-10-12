@@ -142,6 +142,11 @@ There is no scope or stream underneath: the body is read before the handler runs
 `await`. `Request("POST", "/users", body=b"...")`
 builds one by hand, which is how a test calls the handler; `query` takes the raw string or a dict.
 
+Nothing is parsed that the handler does not read: `route`, `query` and `headers` are computed on first use, and
+an HTTP/1 request without `content-length` or `transfer-encoding` has no body to wait for. On HTTP/1.1
+[bench/](bench/) cannot tell matchapi from a bare RSGI application answering the same routes by hand, and puts
+it ahead of Emmett, BlackSheep, Starlette, Litestar and FastAPI under the same granian.
+
 ### The return value is the response
 
 | Return | Response |
@@ -299,7 +304,7 @@ handler stays a function that works without a server.
 The decisions and the alternatives that were rejected are in [docs/design.md](docs/design.md): why the router
 went instead of the signature magic, why a decorator rather than a command, why the body is read before the
 call, why there is only RSGI through granian, and why there is no compiled core. [CONTEXT.md](CONTEXT.md) is the
-glossary. [bench/](bench/) measures the framework's own share of a request.
+glossary. [bench/](bench/) measures matchapi against a bare RSGI application and against other frameworks.
 
 ## Development
 

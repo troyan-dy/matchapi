@@ -13,8 +13,9 @@ matchapi is a one-file HTTP framework: an HTTP service is one function `handle(r
   test builds a `Request` by hand and drives `__rsgi__` with duck-typed objects.
 - **One file.** `src/matchapi/__init__.py` holds everything; it stays a few hundred lines. granian is the only
   dependency and the core never imports it. There is no command line: `granian app:handle` is the command.
-- **No compiled core** (`docs/design.md`, D8). `bench/` measures the framework's share of a request against a
-  bare RSGI application.
+- **No compiled core** (`docs/design.md`, D8); a request pays for what the handler reads (D9). `bench/`
+  measures matchapi against a bare RSGI application and against Emmett, BlackSheep, Starlette, Litestar and
+  FastAPI under the same granian; a change on the request path is measured there before and after.
 
 ## Workflow
 

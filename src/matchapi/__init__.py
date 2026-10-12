@@ -33,6 +33,9 @@ TEXT = "text/plain; charset=utf-8"
 JSON = "application/json"
 OCTETS = "application/octet-stream"
 BODYLESS = frozenset(range(100, 200)) | {204, 304}  # the statuses HTTP forbids a body for
+HTTP1 = frozenset({"1", "1.0", "1.1"})  # granian's `scope.http_version` for the versions that frame a body by headers
+TEXT_HEADERS = [("content-type", TEXT)]
+JSON_HEADERS = [("content-type", JSON)]
 log = logging.getLogger("matchapi")
 
 
@@ -55,8 +58,12 @@ def _headers(headers: Mapping[str, str] | None) -> dict[str, str]:
     return lowered
 
 
+# built once: `json.dumps` with options builds a new encoder on every call
+_encode = json.JSONEncoder(separators=(",", ":"), ensure_ascii=False).encode
+
+
 def _json(value: object) -> bytes:
-    return json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode()
+    return _encode(value).encode()
 
 
 class HTTPError(Exception):
@@ -69,9 +76,12 @@ class HTTPError(Exception):
 
 
 class Request:
-    """The request as plain data: no transport underneath, so a test builds one by hand."""
+    """The request as plain data: no transport underneath, so a test builds one by hand.
 
-    __slots__ = ("body", "headers", "method", "path", "query")
+    `query`, `headers` and `route` are computed on first use, so a handler pays only for what it reads.
+    """
+
+    __slots__ = ("_headers", "_query", "_route", "_scope", "body", "method", "path")
 
     def __init__(
         self,
@@ -84,14 +94,41 @@ class Request:
     ) -> None:
         self.method = method.upper()
         self.path = path
-        self.query = dict(parse_qsl(query, keep_blank_values=True)) if isinstance(query, str) else dict(query)
-        self.headers = {key.lower(): value for key, value in (headers or {}).items()}
+        self._query: dict[str, str] | None = (
+            dict(parse_qsl(query, keep_blank_values=True)) if isinstance(query, str) else dict(query)
+        )
+        self._headers: dict[str, str] | None = {key.lower(): value for key, value in (headers or {}).items()}
+        self._route: tuple[str, ...] | None = None
+        self._scope: Any = None
         self.body = body
+
+    @classmethod
+    def _from_scope(cls, scope: Any, body: bytes) -> Request:
+        """The server's request, nothing parsed yet: granian gives the method upper-case and the names lower-case."""
+        req = cls.__new__(cls)
+        req.method, req.path, req.body = scope.method, scope.path, body
+        req._query = req._headers = req._route = None
+        req._scope = scope
+        return req
+
+    @property
+    def query(self) -> dict[str, str]:
+        if self._query is None:
+            self._query = dict(parse_qsl(self._scope.query_string, keep_blank_values=True))
+        return self._query
+
+    @property
+    def headers(self) -> dict[str, str]:
+        if self._headers is None:
+            self._headers = dict(self._scope.headers.items())
+        return self._headers
 
     @property
     def route(self) -> tuple[str, ...]:
         """`(method, *segments)`, the subject of the handler's `match`: `/users/42` is `("GET", "users", "42")`."""
-        return (self.method, *(segment for segment in self.path.split("/") if segment))
+        if self._route is None:
+            self._route = (self.method, *[segment for segment in self.path.split("/") if segment])
+        return self._route
 
     def json(self) -> Any:
         try:
@@ -158,6 +195,25 @@ def _with_status(status: int, body: object, extra: Mapping[str, str] | None = No
     return response
 
 
+Wire = tuple[int, list[tuple[str, str]], "str | bytes | Iterable[bytes] | AsyncIterable[bytes]"]
+
+
+def _wire(value: object) -> Wire:
+    """`respond` for the server: the commonest return values skip the `Response` and arrive at the same bytes."""
+    status, body = 200, value
+    if type(value) is tuple and len(value) == 2 and type(value[0]) is int and value[0] not in BODYLESS:
+        status, body = value
+    if type(body) is str:
+        return _status(status), TEXT_HEADERS, body
+    if type(body) is dict or type(body) is list:
+        return _status(status), JSON_HEADERS, _encode(body)
+    return _parts(respond(value))
+
+
+def _parts(response: Response) -> Wire:
+    return response.status, list(response.headers.items()), response.body
+
+
 def _failed(req: Request, error: BaseException) -> Response:
     if isinstance(error, HTTPError):
         if error.status in BODYLESS:
@@ -183,29 +239,36 @@ class App:
     def __call__(self, req: Request) -> Any:
         return self.handler(req)
 
-    async def _respond(self, req: Request) -> Response:
-        try:
-            result = self.handler(req) if self._async else await asyncio.to_thread(self.handler, req)
-            if inspect.isawaitable(result):
-                self._async = True
-                result = await result
-            return respond(result)
-        except Exception as error:
-            return _failed(req, error)
+    async def _result(self, req: Request) -> Any:
+        result = self.handler(req) if self._async else await asyncio.to_thread(self.handler, req)
+        if inspect.isawaitable(result):
+            self._async = True
+            result = await result
+        return result
 
     async def __rsgi__(self, scope: Any, protocol: Any) -> None:
         """What granian calls: `scope` describes the request, `protocol` reads the body and sends the response."""
-        body = await protocol()  # the whole body; a client that went away raises here, and the handler never runs
-        req = Request(
-            scope.method, scope.path, query=scope.query_string, headers=dict(scope.headers.items()), body=body
-        )
-        response = await self._respond(req)
-        headers = list(response.headers.items())
-        if isinstance(response.body, bytes):
-            protocol.response_bytes(response.status, headers, response.body)
+        # RFC 9112, 6.3: an HTTP/1 request with neither header has no body, so there is nothing to await. Otherwise
+        # the whole body; a client that went away raises here, and the handler never runs.
+        if scope.http_version in HTTP1 and not (
+            scope.headers.get("content-length") or scope.headers.get("transfer-encoding")
+        ):
+            content = b""
+        else:
+            content = await protocol()
+        req = Request._from_scope(scope, content)
+        try:
+            status, headers, body = _wire(await self._result(req))
+        except Exception as error:
+            status, headers, body = _parts(_failed(req, error))
+        if isinstance(body, str):
+            protocol.response_str(status, headers, body)
             return
-        stream = protocol.response_stream(response.status, headers)
-        chunks = aiter(response.body) if isinstance(response.body, AsyncIterable) else _aiter(response.body)
+        if isinstance(body, bytes):
+            protocol.response_bytes(status, headers, body)
+            return
+        stream = protocol.response_stream(status, headers)
+        chunks = aiter(body) if isinstance(body, AsyncIterable) else _aiter(body)
         while True:
             try:
                 chunk = await anext(chunks)  # the handler's code
