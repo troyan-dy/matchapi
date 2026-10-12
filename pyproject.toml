@@ -1,7 +1,7 @@
 [project]
 name = "matchapi"
-version = "0.2.0"
-description = "An HTTP service is one function: match replaces the router"
+version = "0.2.1"
+description = "One-function HTTP framework for granian over RSGI: match replaces the router"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -10,9 +10,30 @@ requires-python = ">=3.11"
 dependencies = [
   "granian>=2.8",
 ]
-keywords = ["http", "rsgi", "granian", "web", "framework", "match", "pattern-matching", "microservice", "webhook"]
+keywords = [
+  "http",
+  "rsgi",
+  "granian",
+  "web",
+  "framework",
+  "web-framework",
+  "microframework",
+  "async",
+  "asyncio",
+  "api",
+  "rest",
+  "json",
+  "match",
+  "pattern-matching",
+  "structural-pattern-matching",
+  "microservice",
+  "webhook",
+  "single-file",
+  "rust",
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Environment :: Web Environment",
   "Framework :: AsyncIO",
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
@@ -22,6 +43,8 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
   "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
   "Topic :: Software Development :: Libraries :: Application Frameworks",
   "Typing :: Typed",

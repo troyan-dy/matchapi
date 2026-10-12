@@ -7,6 +7,10 @@
 
 An HTTP service is one function. `match` replaces the router.
 
+A one-file Python web framework for [granian](https://github.com/emmett-framework/granian) over
+[RSGI](https://github.com/emmett-framework/granian/blob/master/docs/spec/RSGI.md), granian's native Rust-backed
+interface: no router, no middleware, no ASGI adapter. Python 3.11+.
+
 ```python
 # app.py
 import matchapi
