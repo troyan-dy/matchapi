@@ -126,14 +126,14 @@ def test_the_sample_service_matches_on_route() -> None:
 
 
 def test_the_decorated_handler_is_still_the_function() -> None:
-    @app
     def handle(req: Request) -> object:
         """Doc of handle."""
         return req.route
 
-    assert handle(Request("GET", "/x")) == ("GET", "x")  # called like the function, nothing in between
-    assert (handle.__name__, handle.__doc__, handle.__wrapped__) == ("handle", "Doc of handle.", handle.handler)
-    assert inspect.iscoroutinefunction(handle.__rsgi__)  # what granian calls
+    served = app(handle)
+    assert served(Request("GET", "/x")) == ("GET", "x")  # called like the function, nothing in between
+    assert (served.__name__, served.__doc__, served.__wrapped__) == ("handle", "Doc of handle.", handle)
+    assert inspect.iscoroutinefunction(served.__rsgi__)  # the RSGI spec: the application is a coroutine function
 
 
 async def test_the_decorated_async_handler_returns_its_coroutine() -> None:
@@ -221,6 +221,25 @@ async def test_an_error_inside_a_stream_is_logged_and_ends_the_stream(caplog: py
     assert protocol.sent == [(200, [], None), b"a"]  # the status went out before the error; the stream just ends
     assert "GET /x failed while streaming" in caplog.text
     assert "RuntimeError: cut" in caplog.text
+
+
+async def test_a_client_that_leaves_during_a_stream_is_left_to_the_server(caplog: pytest.LogCaptureFixture) -> None:
+    def chunks() -> Iterable[bytes]:
+        yield b"a"
+        yield b"b"
+
+    class ClosedError(Exception):
+        """granian's ProtocolClosed: the transport cannot send because the client went away."""
+
+    class Gone(Protocol):
+        async def send_bytes(self, chunk: bytes) -> None:
+            raise ClosedError
+
+    protocol = Gone()
+    with caplog.at_level(logging.ERROR, logger="matchapi"), pytest.raises(ClosedError):
+        await app(lambda req: Response(200, chunks())).__rsgi__(scope("GET", "/x"), protocol)
+    assert protocol.sent == [(200, [], None)]
+    assert caplog.text == ""  # not the handler's failure: nothing to log here
 
 
 @pytest.mark.parametrize("value", [0, 1000, Response(99), (1, "x")])
@@ -390,7 +409,7 @@ def test_granian_serves_the_sample_over_http() -> None:
         port = sock.getsockname()[1]
     root = Path(__file__).resolve().parent.parent
     process = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-m", "granian", "--interface", "rsgi", "tests.sample:handle", "--port", str(port)],
+        [sys.executable, "-m", "granian", "tests.sample:handle", "--port", str(port)],  # the README's command
         cwd=root,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

@@ -28,10 +28,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}"
 PATHS = ["/ping", "/users/42"]
+GRANIAN = [sys.executable, "-m", "granian"]  # the README's `granian app:handle`: RSGI is the default interface
 SERVERS = {
-    "bare RSGI, granian": [sys.executable, "-m", "granian", "--interface", "rsgi", "bare:app"],
-    "bare RSGI reading the body, granian": [sys.executable, "-m", "granian", "--interface", "rsgi", "bare_body:app"],
-    "matchapi, granian": [sys.executable, "-m", "granian", "--interface", "rsgi", "service:handle"],
+    "bare RSGI, granian": [*GRANIAN, "bare:app"],
+    "bare RSGI reading the body, granian": [*GRANIAN, "bare_body:app"],
+    "matchapi, granian": [*GRANIAN, "service:handle"],
     "matchapi 0.1.0, uvicorn": [
         "uv", "run", "--no-project", "--python", PYTHON, "--with", "matchapi==0.1.0",
         "python", "-m", "matchapi", "service_asgi",

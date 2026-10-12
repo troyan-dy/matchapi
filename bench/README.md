@@ -39,7 +39,7 @@ Python 3.14.6, Darwin arm64, 2026-10-12; oha, 64 connections, 10s per cell, one 
 What the rows say:
 
 - Reading the body before the handler costs about forty percent of the ceiling on a request that has no body:
-  the one `await protocol()` is the expensive part of serving a trivial endpoint.
+  the one `await protocol()` is the expensive part of serving a route that answers from memory.
 - matchapi's own code, the `Request`, the `match`, the response rules, is the rest: about ten percent of a bare
   application that reads the body the same way, a few microseconds per request. That is the share D8 of
   [design.md](../docs/design.md) keeps an eye on.

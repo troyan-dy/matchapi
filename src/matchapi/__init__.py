@@ -22,7 +22,7 @@ import functools
 import inspect
 import json
 import logging
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Mapping
 from http import HTTPStatus
 from typing import Any
 from urllib.parse import parse_qsl
@@ -205,15 +205,21 @@ class App:
             protocol.response_bytes(response.status, headers, response.body)
             return
         stream = protocol.response_stream(response.status, headers)
-        try:
-            if isinstance(response.body, AsyncIterable):
-                async for chunk in response.body:
-                    await stream.send_bytes(chunk)
-            else:
-                for chunk in response.body:
-                    await stream.send_bytes(chunk)
-        except Exception as error:  # the status is sent already: log like a handler failure, end the stream
-            log.error("%s %s failed while streaming", req.method, req.path, exc_info=error)
+        chunks = aiter(response.body) if isinstance(response.body, AsyncIterable) else _aiter(response.body)
+        while True:
+            try:
+                chunk = await anext(chunks)  # the handler's code
+            except StopAsyncIteration:
+                return
+            except Exception as error:  # the status is sent already: log like a handler failure, end the stream
+                log.error("%s %s failed while streaming", req.method, req.path, exc_info=error)
+                return
+            await stream.send_bytes(chunk)  # the transport: a client that left raises granian's error, for granian
+
+
+async def _aiter(chunks: Iterable[bytes]) -> AsyncIterator[bytes]:
+    for chunk in chunks:
+        yield chunk
 
 
 def app(handler: Callable[[Request], Any]) -> App:

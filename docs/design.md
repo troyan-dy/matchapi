@@ -41,8 +41,8 @@ the niche does not need. The gains: a sync handler needs no `await`, and a `Requ
 test with no transport underneath.
 
 Under RSGI the read is one `await protocol()` per request, body or no body, and `bench/` shows it is the
-expensive part: on a trivial endpoint it takes about a third of the throughput of a bare application, more
-than the rest of matchapi together. Skipping it when no `content-length` or `transfer-encoding` header is
+expensive part: on a route that answers from memory it takes about forty percent of the throughput of a bare
+application, more than the rest of matchapi together. Skipping it when no `content-length` or `transfer-encoding` header is
 present was considered and rejected: under HTTP/2 a body arrives without either, and a wrong guess hands the
 handler an empty body for a request that had one. A client that sends no body pays for one await on a channel
 that is already closed.
@@ -60,11 +60,11 @@ the function, keeps its name and docstring, and granian runs it with `granian ap
 command line.
 
 Until 0.2.0 it was the other way round: the handler imported nothing, and a `matchapi app` command found the
-function in the module and ran uvicorn, so that the user never learnt what ASGI is. The command was 80 lines,
-a third of the framework, with its own rules (`handle` or the only public function, `module:function`,
+function in the module and ran uvicorn, so that the user never learnt what ASGI is. The command was 70 lines,
+a quarter of the framework, with its own rules (`handle` or the only public function, `module:function`,
 an environment variable and a factory for `--workers` and `--reload`), and it could only ever expose a subset of
 the server's options. The trade: the user writes one import and one decorator more, and the framework loses a
-third of its code and every server concern. Granian's command does the rest: `--workers`, `--reload`,
+quarter of its code and every server concern. Granian's command does the rest: `--workers`, `--reload`,
 `--http 2`, TLS, access logs, and every process imports the module itself.
 
 Rejected: a decorator that starts the server at import time (useless for tests and for granian); a decorator
@@ -79,6 +79,10 @@ run it. granian is the one dependency, and the core never imports it: `__rsgi__(
 everything it needs, so the tests drive it with duck-typed objects, and a client that went away raises
 granian's own exception through it, where granian logs it.
 
+Why granian and not uvicorn, the server of 0.1.0: uvicorn speaks ASGI only, so keeping it meant keeping the
+larger adapter, and it has no HTTP/2; granian serves ASGI too, so nothing is lost by the choice except the
+adapter that was removed on purpose.
+
 Why one interface: 0.1.0 had ASGI, and its first draft had WSGI too. Each adapter brought its own rules for sync
 versus async, for bodies and for headers, and the second one doubled the code. Why RSGI rather than ASGI under
 granian: not speed. Granian's own benchmarks put RSGI within a few percent of ASGI for a plain response. RSGI is
@@ -87,7 +91,7 @@ the smaller adapter: no `receive` loop and no message types, the body is one `aw
 The whole adapter is twenty lines.
 
 Costs accepted: HTTP/2 and TLS come from granian and nothing else; `--reload` needs the `granian[reload]`
-extra; sync handlers run in a thread we start ourselves, since granian's RSGI runtime has no blocking pool
+extra; sync handlers go through `asyncio.to_thread`, since granian has no blocking thread pool for RSGI
 (D7); there is no in-memory test client for RSGI, so the one end-to-end test starts a real granian.
 
 ### D7. Sync or async is read from the result, not from the function
@@ -102,15 +106,18 @@ callable works.
 Under free-threaded Python granian's workers are threads sharing one `App`; the remembered flag is only ever set
 to `True`, so the race is harmless and left alone.
 
-The body of a response may be a sync or an async iterable of `bytes`; both stream. An exception while streaming
-is logged with the method and path like a handler failure; the status is sent already, so the stream ends.
+The body of a response may be a sync or an async iterable of `bytes`; both stream. An exception from the
+iterator while streaming is logged with the method and path like a handler failure; the status is sent
+already, so the stream ends. An exception from the transport, a client that left in the middle of the stream,
+is granian's own and propagates to granian: the core never imports it (D6), so the two are told apart by where
+they come from, the iterator or `send_bytes`, not by type.
 
 ### D8. No compiled core, no Cython, no Rust in matchapi
 
 Under granian the HTTP parsing, the connection handling and the event loop are Rust already, and JSON is C. The
 framework's own work per request is the `Request` constructor, the `match`, and the response rules: a few
-microseconds, and `bench/` puts it below ten percent of the throughput of a bare RSGI application that reads
-the body as matchapi does (D3). Compiling the glue would gain a few percent and cost a wheel matrix and the
+microseconds, and `bench/` puts it at about ten percent of the throughput of a bare RSGI application that
+reads the body as matchapi does (D3). Compiling the glue would gain a few percent and cost a wheel matrix and the
 "one readable file" property. Compiling the user's `match` function does not help either: its body is `dict`
 and `bytes` operations that are the same C API calls compiled or not. Revisit if the bench ever shows
 matchapi's share growing past the body read.

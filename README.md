@@ -97,7 +97,9 @@ The service is a function that takes a `Request` and returns something. That is 
 easy to test, easy to compose, easy to move: two services in one process are a function that calls two others.
 
 `@matchapi.app` marks the function as the application granian runs. It changes nothing about the function:
-`handle(req)` calls it, `handle.__name__` and `handle.__doc__` are its own.
+`handle(req)` calls it, `handle.__name__` and `handle.__doc__` are its own. The one thing that differs is
+`inspect.iscoroutinefunction(handle)`, which is `False` for the decorated object; matchapi itself never asks it,
+it looks at what a call returns.
 
 ### `req.route` is the subject of `match`
 
@@ -160,8 +162,9 @@ so a module-level `NOT_FOUND = Response(404, "no")` is safe to reuse.
 `{"detail": "..."}` with that status; `detail` defaults to the standard phrase. `req.json()` raises it as a 400.
 
 Any other exception is a 500 with the body `Internal Server Error`; the traceback goes to the `matchapi` logger
-together with the method and path. Nothing of the exception reaches the client. An exception while a streaming
-body is being sent is logged the same way; the status is out already, so the stream just ends.
+together with the method and path. Nothing of the exception reaches the client. An exception from the iterator of a streaming body is logged the
+same way; the status is out already, so the stream just ends. A client that leaves in the middle of a stream is
+granian's business, not an error of the handler.
 
 ### Sync or async, the same way
 
