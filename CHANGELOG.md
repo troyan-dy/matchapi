@@ -6,6 +6,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-12
+
+The handler is decorated and granian serves it. The framework loses its command line and its ASGI adapter;
+the handler contract, the request and the response rules are unchanged.
+
+### Changed
+
+- `@matchapi.app` over `handle`: the decorated function is an RSGI application for
+  [granian](https://github.com/emmett-framework/granian) and is still called as the function in tests. Run with
+  `granian app:handle`.
+- granian replaces uvicorn as the one dependency. HTTP/2, TLS, `--workers` and `--reload` are granian's;
+  `--reload` needs `pip install 'granian[reload]'`.
+- An exception inside a streaming response body is logged with the method and path, and the stream ends.
+
+### Removed
+
+- The `matchapi` command (`matchapi app`, `python -m matchapi`), `matchapi.main`, and the rule that found
+  `handle` or the only public function of a module.
+- The ASGI application: uvicorn, hypercorn and ASGI middleware can no longer run a matchapi service.
+
+### Added
+
+- `bench/`: the framework's share of a request, measured against a bare RSGI application and against 0.1.0 under
+  uvicorn.
+
 ## [0.1.0] - 2026-10-12
 
 ### Added
@@ -17,5 +42,6 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 - The `matchapi` command: `matchapi app` serves the module's `handle` with uvicorn; `--host`, `--port`,
   `--workers`, `--reload`.
 
-[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/troyan-dy/matchapi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/troyan-dy/matchapi/releases/tag/v0.1.0

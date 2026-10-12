@@ -1,5 +1,8 @@
 """matchapi: an HTTP service is one function, and `match` replaces the router.
 
+import matchapi
+
+@matchapi.app
 async def handle(req):
     match req.route:
         case "GET", "ping":
@@ -9,25 +12,22 @@ async def handle(req):
         case _:
             return 404
 
-$ matchapi app
+$ granian app:handle
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
-import importlib
+import functools
 import inspect
 import json
 import logging
-import os
-import sys
-from collections.abc import AsyncIterable, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Mapping
 from http import HTTPStatus
 from typing import Any
 from urllib.parse import parse_qsl
 
-__all__ = ["App", "HTTPError", "Request", "Response", "app", "main", "respond"]
+__all__ = ["App", "HTTPError", "Request", "Response", "app", "respond"]
 
 TEXT = "text/plain; charset=utf-8"
 JSON = "application/json"
@@ -168,12 +168,20 @@ def _failed(req: Request, error: BaseException) -> Response:
 
 
 class App:
-    """The handler as an ASGI application."""
+    """The handler as an RSGI application; calling it is calling the handler."""
+
+    __name__: str
+    __wrapped__: Callable[[Request], Any]
 
     def __init__(self, handler: Callable[[Request], Any]) -> None:
+        functools.update_wrapper(self, handler)  # first: a callable object's __dict__ must not shadow the fields
         self.handler = handler
-        # True once a call has returned an awaitable: the next call then skips the thread pool
+        # True once a call has returned an awaitable: the next call then skips the thread pool. Under free-threaded
+        # Python the workers are threads sharing this object; the write is idempotent, so the race is harmless.
         self._async = inspect.iscoroutinefunction(handler) or None
+
+    def __call__(self, req: Request) -> Any:
+        return self.handler(req)
 
     async def _respond(self, req: Request) -> Response:
         try:
@@ -185,122 +193,35 @@ class App:
         except Exception as error:
             return _failed(req, error)
 
-    async def __call__(
-        self, scope: Mapping[str, Any], receive: Callable[[], Awaitable[Any]], send: Callable[[Any], Awaitable[None]]
-    ) -> None:
-        match scope["type"]:
-            case "lifespan":
-                while (await receive())["type"] != "lifespan.shutdown":
-                    await send({"type": "lifespan.startup.complete"})
-                await send({"type": "lifespan.shutdown.complete"})
-            case "http":
-                body = bytearray()
-                while True:
-                    message = await receive()
-                    if message["type"] == "http.disconnect":
-                        return  # nobody is listening: the handler does not run on a truncated body
-                    body += message.get("body", b"")
-                    if not message.get("more_body"):
-                        break
-                req = Request(
-                    scope["method"],
-                    scope["path"],
-                    query=scope.get("query_string", b"").decode("latin-1"),
-                    headers={key.decode("latin-1"): value.decode("latin-1") for key, value in scope.get("headers", [])},
-                    body=bytes(body),
-                )
-                response = await self._respond(req)
-                headers = [(key.encode("latin-1"), value.encode("latin-1")) for key, value in response.headers.items()]
-                await send({"type": "http.response.start", "status": response.status, "headers": headers})
-                if isinstance(response.body, bytes):
-                    await send({"type": "http.response.body", "body": response.body})
-                elif isinstance(response.body, AsyncIterable):
-                    async for chunk in response.body:
-                        await send({"type": "http.response.body", "body": chunk, "more_body": True})
-                    await send({"type": "http.response.body", "body": b""})
-                else:
-                    for chunk in response.body:
-                        await send({"type": "http.response.body", "body": chunk, "more_body": True})
-                    await send({"type": "http.response.body", "body": b""})
-            case "websocket":
-                await send({"type": "websocket.close"})
+    async def __rsgi__(self, scope: Any, protocol: Any) -> None:
+        """What granian calls: `scope` describes the request, `protocol` reads the body and sends the response."""
+        body = await protocol()  # the whole body; a client that went away raises here, and the handler never runs
+        req = Request(
+            scope.method, scope.path, query=scope.query_string, headers=dict(scope.headers.items()), body=body
+        )
+        response = await self._respond(req)
+        headers = list(response.headers.items())
+        if isinstance(response.body, bytes):
+            protocol.response_bytes(response.status, headers, response.body)
+            return
+        stream = protocol.response_stream(response.status, headers)
+        chunks = aiter(response.body) if isinstance(response.body, AsyncIterable) else _aiter(response.body)
+        while True:
+            try:
+                chunk = await anext(chunks)  # the handler's code
+            except StopAsyncIteration:
+                return
+            except Exception as error:  # the status is sent already: log like a handler failure, end the stream
+                log.error("%s %s failed while streaming", req.method, req.path, exc_info=error)
+                return
+            await stream.send_bytes(chunk)  # the transport: a client that left raises granian's error, for granian
+
+
+async def _aiter(chunks: Iterable[bytes]) -> AsyncIterator[bytes]:
+    for chunk in chunks:
+        yield chunk
 
 
 def app(handler: Callable[[Request], Any]) -> App:
-    """Wrap the handler for a server of your own: `app = matchapi.app(handle)`, then `uvicorn asgi:app`."""
+    """The decorator: `@matchapi.app` over `handle`, then `granian app:handle`."""
     return App(handler)
-
-
-def _load(target: str) -> Callable[[Request], Any]:
-    module_name, _, attribute = target.partition(":")
-    if not module_name:
-        raise SystemExit(
-            f"{target!r}: the target is module or module:function, e.g. `matchapi app` or `matchapi app:handle`"
-        )
-    try:
-        module = importlib.import_module(module_name)
-    except ModuleNotFoundError as error:
-        if error.name != module_name and not module_name.startswith(f"{error.name}."):
-            raise  # the module was found; something it imports was not, and that is the user's traceback
-        hint = f"; drop the .py: `matchapi {module_name[:-3]}`" if module_name.endswith(".py") else ""
-        raise SystemExit(f"{error}{hint}") from error
-    if attribute:
-        if not hasattr(module, attribute):
-            raise SystemExit(f"{module_name} has no `{attribute}`")
-    elif hasattr(module, "handle"):
-        attribute = "handle"
-    else:
-        public = [
-            name
-            for name, value in vars(module).items()
-            if not name.startswith("_") and inspect.isfunction(value) and value.__module__ == module.__name__
-        ]
-        if not public:
-            raise SystemExit(f"{module_name} has no public function to serve")
-        if len(public) > 1:
-            raise SystemExit(
-                f"{module_name} has no `handle` and several public functions: {', '.join(public)}; "
-                f"run `matchapi {module_name}:<function>`"
-            )
-        attribute = public[0]
-    handler: Callable[[Request], Any] = getattr(module, attribute)
-    if not callable(handler):
-        raise SystemExit(f"{module_name}: `{attribute}` is not callable")
-    return handler
-
-
-def _factory() -> App:
-    """The import string of `--workers` and `--reload`: every worker process loads the handler itself."""
-    return app(_load(os.environ["MATCHAPI_TARGET"]))
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(
-        prog="matchapi", description="Serve a module whose function `handle(req)` is the HTTP service."
-    )
-    parser.add_argument(
-        "target", help="the module, or module:function; without a function, `handle` or the only public one"
-    )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--workers", type=int, help="processes; the handler is loaded in each of them")
-    parser.add_argument("--reload", action="store_true", help="restart on a code change")
-    args = parser.parse_args(argv)
-    if (cwd := os.getcwd()) not in sys.path:
-        sys.path.insert(0, cwd)
-    handler = _load(args.target)  # fail here, with the message, rather than in a worker
-
-    import uvicorn
-
-    if args.workers or args.reload:
-        os.environ["MATCHAPI_TARGET"] = args.target
-        uvicorn.run(
-            f"{__name__}:_factory",
-            host=args.host,
-            port=args.port,
-            workers=args.workers,
-            reload=args.reload,
-            factory=True,
-        )
-    else:
-        uvicorn.run(app(handler), host=args.host, port=args.port)
