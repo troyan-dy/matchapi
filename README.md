@@ -9,6 +9,10 @@ An HTTP service is one function. `match` replaces the router.
 
 ```python
 # app.py
+import matchapi
+
+
+@matchapi.app
 async def handle(req):
     match req.route:
         case "GET", "ping":
@@ -24,11 +28,12 @@ async def handle(req):
 
 ```console
 $ pip install matchapi
-$ matchapi app
-INFO:     Started server process [62579]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+$ granian app:handle
+[INFO] Starting granian (main PID: 505)
+[INFO] Listening at: http://127.0.0.1:8000
+[INFO] Spawning worker-1 with PID: 512
+[INFO] Started worker-1
+[INFO] Started worker-1 runtime-1
 ```
 
 ```console
@@ -38,24 +43,24 @@ $ curl localhost:8000/users/42
 {"id":42,"name":"ann"}
 $ curl -i -X POST localhost:8000/users -d '{"name": "bob"}'
 HTTP/1.1 201 Created
-date: Mon, 12 Oct 2026 00:10:08 GMT
-server: uvicorn
 content-type: application/json
 content-length: 21
+server: granian
+date: Mon, 12 Oct 2026 01:26:59 GMT
 
 {"id":7,"name":"bob"}
 $ curl -i localhost:8000/nothing
 HTTP/1.1 404 Not Found
-date: Mon, 12 Oct 2026 00:10:08 GMT
-server: uvicorn
 content-type: text/plain; charset=utf-8
 content-length: 9
+server: granian
+date: Mon, 12 Oct 2026 01:26:59 GMT
 
 Not Found
 ```
 
-No decorators, no route table, no schema classes, no dependency markers. The file above does not even import
-`matchapi`: it is a Python function that takes a request and returns a value, and it can be called like one.
+One import and one decorator; no route table, no schema classes, no dependency markers, no middleware stack. The
+decorated `handle` is still the function it was: a test calls it with a request and compares the return value.
 
 - [Why](#why)
 - [The model](#the-model)
@@ -81,7 +86,8 @@ models. A service with three endpoints pays for all of it.
 Python has had structural pattern matching since 3.10. A `match` over `(method, *segments)` is a router already:
 it binds path parameters, it falls through to a default, it nests, and the language, not a library, defines how it
 reads. matchapi is what is left of a framework once the router is gone: a `Request`, a `Response`, the rules that
-turn a return value into one, and a command that serves a module.
+turn a return value into one, and a decorator that lets [granian](https://github.com/emmett-framework/granian)
+serve the function.
 
 ## The model
 
@@ -89,6 +95,9 @@ turn a return value into one, and a command that serves a module.
 
 The service is a function that takes a `Request` and returns something. That is the whole contract. A function is
 easy to test, easy to compose, easy to move: two services in one process are a function that calls two others.
+
+`@matchapi.app` marks the function as the application granian runs. It changes nothing about the function:
+`handle(req)` calls it, `handle.__name__` and `handle.__doc__` are its own.
 
 ### `req.route` is the subject of `match`
 
@@ -119,11 +128,11 @@ strings for the cases where a plain comparison reads better.
 | `path` | `str` | `"/users/42"` |
 | `route` | `tuple[str, ...]` | `("POST", "users", "42")` |
 | `query` | `dict[str, str]`, last value wins | `{"q": "x"}` |
-| `headers` | `dict[str, str]`, lower-case names | `{"content-type": "application/json"}` |
+| `headers` | `dict[str, str]`, lower-case names, last value wins | `{"content-type": "application/json"}` |
 | `body` | `bytes`, read in full before the call | `b'{"name": "bob"}'` |
 | `json()` | the body as JSON; a broken body is a 400 | `{"name": "bob"}` |
 
-There is no `scope` or stream underneath: the body is read before the handler runs, so a sync handler needs no
+There is no scope or stream underneath: the body is read before the handler runs, so a sync handler needs no
 `await`. `Request("POST", "/users", body=b"...")`
 builds one by hand, which is how a test calls the handler; `query` takes the raw string or a dict.
 
@@ -151,44 +160,33 @@ so a module-level `NOT_FOUND = Response(404, "no")` is safe to reuse.
 `{"detail": "..."}` with that status; `detail` defaults to the standard phrase. `req.json()` raises it as a 400.
 
 Any other exception is a 500 with the body `Internal Server Error`; the traceback goes to the `matchapi` logger
-together with the method and path. Nothing of the exception reaches the client.
+together with the method and path. Nothing of the exception reaches the client. An exception while a streaming
+body is being sent is logged the same way; the status is out already, so the stream just ends.
 
 ### Sync or async, the same way
 
-`def handle(req)` and `async def handle(req)` are both fine. A sync handler runs in a thread pool, an async one in
-the event loop; both are served by the same uvicorn. The kind of handler is read from the result of a call, not
-from the function, so a `functools.partial`, a callable object or a compiled function all work, and a sync
-function that returns a coroutine from some branches is awaited on those.
+`def handle(req)` and `async def handle(req)` are both fine. A sync handler runs in a thread, an async one in the
+event loop. The kind of handler is read from the result of a call, not from the function, so a
+`functools.partial`, a callable object or a compiled function all work, and a sync function that returns a
+coroutine from some branches is awaited on those.
 
 ## Running
 
-```console
-$ matchapi app                      # app.py in the working directory, its function `handle`
-$ matchapi app:serve                # another function
-$ matchapi api.users                # a module in a package
-$ matchapi app --host 0.0.0.0 --port 80 --workers 4
-$ matchapi app --reload             # development
-$ python -m matchapi app            # the same command
-```
-
-Without `:function`, the command takes `handle`, and if there is none, the only public function the module defines.
-The server is uvicorn, the one dependency of the package. `--workers` and `--reload` make every process load the
-module itself.
-
-For a server of your own, `matchapi.app(handle)` is an ASGI application:
-
-```python
-# asgi.py
-import matchapi
-from app import handle
-
-app = matchapi.app(handle)
-```
+The server is [granian](https://github.com/emmett-framework/granian), the one dependency of the package; the
+decorated function is an [RSGI](https://github.com/emmett-framework/granian/blob/master/docs/spec/RSGI.md)
+application, granian's native interface.
 
 ```console
-$ uvicorn asgi:app
-$ granian --interface asgi asgi:app
+$ granian app:handle                                # app.py in the working directory, its function `handle`
+$ granian api.users:handle                          # a module in a package
+$ granian app:handle --host 0.0.0.0 --port 80 --workers 4
+$ granian app:handle --http 2                       # HTTP/2 without TLS (h2c)
+$ granian app:handle --reload                       # development; needs `pip install 'granian[reload]'`
+$ python -m granian app:handle                      # the same command
 ```
+
+`--workers` and `--reload` make every process import the module itself. The rest of the options, TLS, an event
+loop, access logs, are granian's: `granian --help`.
 
 ## Testing
 
@@ -223,6 +221,7 @@ line matter, `matchapi.respond(value)` turns a return value into the `Response` 
 **Authorization** is a line before the `match`:
 
 ```python
+@matchapi.app
 async def handle(req):
     if req.headers.get("authorization") != f"Bearer {TOKEN}":
         return 401
@@ -233,6 +232,7 @@ async def handle(req):
 **Two services in one process** are two functions and a prefix:
 
 ```python
+@matchapi.app
 async def handle(req):
     match req.route:
         case _, "users", *rest:
@@ -248,6 +248,7 @@ async def handle(req):
 ```python
 from dataclasses import dataclass
 
+import matchapi
 from matchapi import HTTPError
 
 
@@ -257,6 +258,7 @@ class NewUser:
     age: int = 0
 
 
+@matchapi.app
 async def handle(req):
     match req.route:
         case "POST", "users":
@@ -277,18 +279,20 @@ return Response(200, (chunk for chunk in lines()))
 
 ## What matchapi does not do
 
-No router or decorators, no middleware stack, no parameter conversion from type hints, no OpenAPI, no cookies or
-sessions, no templates, no static files, no websockets, no streaming request bodies, no WSGI. Each of these is
-either a few lines in the handler or a job for an ASGI middleware wrapped around `matchapi.app(handle)`.
+No router or decorators for routes, no middleware stack, no parameter conversion from type hints, no OpenAPI, no
+cookies or sessions, no templates, no static files, no websockets, no streaming request bodies, no ASGI or WSGI.
+Each of these is either a few lines in the handler or not matchapi's job: the server is granian and the only
+interface is RSGI, so there is no middleware layer to plug into.
 
-The line is deliberate. The framework fits in one file of about 300 lines that reads in half an hour, and the
-handler stays a function that works without it.
+The line is deliberate. The framework fits in one file of about 200 lines that reads in half an hour, and the
+handler stays a function that works without a server.
 
 ## Design notes
 
 The decisions and the alternatives that were rejected are in [docs/design.md](docs/design.md): why the router
-went instead of the signature magic, why there is a command rather than an `app = ...` line, why the body is read
-before the call, why there is only ASGI, and why there is no compiled core.
+went instead of the signature magic, why a decorator rather than a command, why the body is read before the
+call, why there is only RSGI through granian, and why there is no compiled core. [CONTEXT.md](CONTEXT.md) is the
+glossary. [bench/](bench/) measures the framework's own share of a request.
 
 ## Development
 

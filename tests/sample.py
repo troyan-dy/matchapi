@@ -1,3 +1,7 @@
+import matchapi
+
+
+@matchapi.app
 async def handle(req):
     match req.route:
         case "GET", "ping":

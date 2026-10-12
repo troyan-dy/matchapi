@@ -3,7 +3,6 @@ import functools
 import inspect
 import json
 import logging
-import os
 import socket
 import subprocess
 import sys
@@ -13,53 +12,62 @@ import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-import matchapi
 from matchapi import HTTPError, Request, Response, app
 
 Headers = dict[str, str]
 
 
-def channel(
-    *messages: dict[str, Any],
-) -> tuple[Callable[[], Awaitable[Any]], Callable[[Any], Awaitable[None]], list[Any]]:
-    """ASGI `receive` that yields the messages and `send` that records into the returned list."""
-    received = iter(messages)
-    sent: list[dict[str, Any]] = []
+class RSGIHeaders(list[tuple[str, str]]):
+    """The request headers as granian gives them: lower-case names, repeated names kept, `items()` lists them all."""
 
-    async def receive() -> dict[str, Any]:
-        return next(received)
-
-    async def send(message: dict[str, Any]) -> None:
-        sent.append(message)
-
-    return receive, send, sent
+    def items(self) -> list[tuple[str, str]]:
+        return list(self)
 
 
-async def call_asgi(
-    asgi: Any,
+def scope(method: str, path: str, query: str = "", headers: Iterable[tuple[str, str]] = ()) -> Any:
+    return SimpleNamespace(method=method, path=path, query_string=query, headers=RSGIHeaders(headers))
+
+
+class Protocol:
+    """A duck-typed RSGI protocol: the body it gives the app, and what the app sent back, in order."""
+
+    def __init__(self, body: bytes = b"") -> None:
+        self.body = body
+        self.sent: list[Any] = []
+
+    async def __call__(self) -> bytes:
+        return self.body
+
+    def response_bytes(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
+        self.sent.append((status, headers, body))
+
+    def response_stream(self, status: int, headers: list[tuple[str, str]]) -> "Protocol":
+        self.sent.append((status, headers, None))
+        return self
+
+    async def send_bytes(self, chunk: bytes) -> None:
+        self.sent.append(chunk)
+
+
+async def call_rsgi(
+    served: Any,
     method: str,
     path: str,
     *,
-    query: bytes = b"",
-    headers: Iterable[tuple[bytes, bytes]] = (),
+    query: str = "",
+    headers: Iterable[tuple[str, str]] = (),
     body: bytes = b"",
-    chunks: list[bytes] | None = None,
 ) -> tuple[int, Headers, bytes]:
-    scope = {"type": "http", "method": method, "path": path, "query_string": query, "headers": list(headers)}
-    messages = [{"type": "http.request", "body": chunk, "more_body": True} for chunk in (chunks or [body])]
-    messages[-1]["more_body"] = False
-    receive, send, sent = channel(*messages)
-    await asgi(scope, receive, send)
-    start, *rest = sent
-    assert start["type"] == "http.response.start"
-    assert all(message["type"] == "http.response.body" for message in rest)
-    assert rest[-1].get("more_body", False) is False
-    response_headers = {key.decode(): value.decode() for key, value in start["headers"]}
-    return start["status"], response_headers, b"".join(message.get("body", b"") for message in rest)
+    protocol = Protocol(body)
+    await served.__rsgi__(scope(method, path, query, headers), protocol)
+    (status, response_headers, whole), *chunks = protocol.sent
+    assert all(isinstance(chunk, bytes) for chunk in chunks)
+    return status, dict(response_headers), b"".join(chunks) if whole is None else whole
 
 
 # Request
@@ -114,6 +122,28 @@ def test_the_sample_service_matches_on_route() -> None:
     asyncio.run(run())
 
 
+# The decorator
+
+
+def test_the_decorated_handler_is_still_the_function() -> None:
+    @app
+    def handle(req: Request) -> object:
+        """Doc of handle."""
+        return req.route
+
+    assert handle(Request("GET", "/x")) == ("GET", "x")  # called like the function, nothing in between
+    assert (handle.__name__, handle.__doc__, handle.__wrapped__) == ("handle", "Doc of handle.", handle.handler)
+    assert inspect.iscoroutinefunction(handle.__rsgi__)  # what granian calls
+
+
+async def test_the_decorated_async_handler_returns_its_coroutine() -> None:
+    @app
+    async def handle(req: Request) -> object:
+        return "hi"
+
+    assert await handle(Request("GET", "/")) == "hi"
+
+
 # The return value becomes the response
 
 
@@ -142,20 +172,20 @@ def test_the_sample_service_matches_on_route() -> None:
 async def test_return_value_becomes_the_response(
     value: object, status: int, content_type: str | None, body: bytes, length: str | None
 ) -> None:
-    got_status, headers, got_body = await call_asgi(app(lambda req: value), "GET", "/")
+    got_status, headers, got_body = await call_rsgi(app(lambda req: value), "GET", "/")
     assert (got_status, headers.get("content-type"), got_body) == (status, content_type, body)
     assert headers.get("content-length") == length
 
 
 async def test_a_tuple_with_headers() -> None:
-    status, headers, body = await call_asgi(app(lambda req: (201, "made", {"X-Id": "7"})), "GET", "/")
+    status, headers, body = await call_rsgi(app(lambda req: (201, "made", {"X-Id": "7"})), "GET", "/")
     assert (status, headers["x-id"], body) == (201, "7", b"made")
     assert headers["content-type"] == "text/plain; charset=utf-8"
 
 
 async def test_a_tuple_does_not_change_a_shared_response() -> None:
     not_found = Response(404, "nf")  # a module-level constant in a real service
-    status, headers, body = await call_asgi(app(lambda req: (410, not_found, {"x-gone": "1"})), "GET", "/")
+    status, headers, body = await call_rsgi(app(lambda req: (410, not_found, {"x-gone": "1"})), "GET", "/")
     assert (status, headers["x-gone"], body) == (410, "1", b"nf")
     assert (not_found.status, "x-gone" in not_found.headers) == (404, False)
 
@@ -165,49 +195,67 @@ async def test_an_iterable_body_streams() -> None:
         yield b"a"
         yield b"b"
 
-    status, headers, body = await call_asgi(app(lambda req: Response(200, chunks())), "GET", "/")
+    status, headers, body = await call_rsgi(app(lambda req: Response(200, chunks())), "GET", "/")
     assert (status, body) == (200, b"ab")
     assert "content-length" not in headers
 
 
-async def test_an_async_iterable_body_streams_under_asgi() -> None:
+async def test_an_async_iterable_body_streams() -> None:
     async def chunks() -> AsyncIterator[bytes]:
         yield b"a"
         yield b"b"
 
-    status, headers, body = await call_asgi(app(lambda req: Response(200, chunks())), "GET", "/")
+    status, headers, body = await call_rsgi(app(lambda req: Response(200, chunks())), "GET", "/")
     assert (status, body) == (200, b"ab")
     assert "content-length" not in headers
+
+
+async def test_an_error_inside_a_stream_is_logged_and_ends_the_stream(caplog: pytest.LogCaptureFixture) -> None:
+    def chunks() -> Iterable[bytes]:
+        yield b"a"
+        raise RuntimeError("cut")
+
+    protocol = Protocol()
+    with caplog.at_level(logging.ERROR, logger="matchapi"):
+        await app(lambda req: Response(200, chunks())).__rsgi__(scope("GET", "/x"), protocol)
+    assert protocol.sent == [(200, [], None), b"a"]  # the status went out before the error; the stream just ends
+    assert "GET /x failed while streaming" in caplog.text
+    assert "RuntimeError: cut" in caplog.text
 
 
 @pytest.mark.parametrize("value", [0, 1000, Response(99), (1, "x")])
 async def test_an_impossible_status_is_a_logged_500(value: object, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.ERROR, logger="matchapi"):
-        status, _, _ = await call_asgi(app(lambda req: value), "GET", "/")
+        status, _, _ = await call_rsgi(app(lambda req: value), "GET", "/")
     assert status == 500
     assert "status" in caplog.text
 
 
-async def test_a_disconnect_while_reading_the_body_sends_nothing() -> None:
+async def test_a_disconnect_while_reading_the_body_runs_nothing() -> None:
     seen: list[Request] = []
 
     def handle(req: Request) -> object:
         seen.append(req)
         return "never"
 
-    scope = {"type": "http", "method": "POST", "path": "/", "query_string": b"", "headers": []}
-    receive, send, sent = channel(
-        {"type": "http.request", "body": b"{", "more_body": True}, {"type": "http.disconnect"}
-    )
-    await app(handle)(scope, receive, send)
-    assert (seen, sent) == ([], [])
+    class ClosedError(Exception):
+        """granian's ProtocolClosed: the body cannot be read because the client went away."""
+
+    class Gone(Protocol):
+        async def __call__(self) -> bytes:
+            raise ClosedError
+
+    protocol = Gone()
+    with pytest.raises(ClosedError):  # left to the server: nobody is listening, and the core does not import granian
+        await app(handle).__rsgi__(scope("POST", "/"), protocol)
+    assert (seen, protocol.sent) == ([], [])
 
 
 async def test_http_error_is_a_json_detail() -> None:
     def handle(req: Request) -> object:
         raise HTTPError(403, "no")
 
-    status, headers, body = await call_asgi(app(handle), "GET", "/")
+    status, headers, body = await call_rsgi(app(handle), "GET", "/")
     assert (status, headers["content-type"], json.loads(body)) == (403, "application/json", {"detail": "no"})
 
 
@@ -215,7 +263,7 @@ async def test_http_error_with_a_bodyless_status_has_no_body() -> None:
     def handle(req: Request) -> object:
         raise HTTPError(304)
 
-    status, headers, body = await call_asgi(app(handle), "GET", "/")
+    status, headers, body = await call_rsgi(app(handle), "GET", "/")
     assert (status, headers, body) == (304, {}, b"")
 
 
@@ -223,7 +271,7 @@ async def test_http_error_detail_defaults_to_the_phrase() -> None:
     def handle(req: Request) -> object:
         raise HTTPError(404)
 
-    status, _, body = await call_asgi(app(handle), "GET", "/")
+    status, _, body = await call_rsgi(app(handle), "GET", "/")
     assert (status, json.loads(body)) == (404, {"detail": "Not Found"})
 
 
@@ -232,7 +280,7 @@ async def test_any_other_exception_is_a_logged_500(caplog: pytest.LogCaptureFixt
         raise ValueError("boom")
 
     with caplog.at_level(logging.ERROR, logger="matchapi"):
-        status, headers, body = await call_asgi(app(handle), "GET", "/x")
+        status, headers, body = await call_rsgi(app(handle), "GET", "/x")
     assert (status, headers["content-type"], body) == (500, "text/plain; charset=utf-8", b"Internal Server Error")
     assert "ValueError: boom" in caplog.text
     assert "GET /x" in caplog.text
@@ -240,7 +288,7 @@ async def test_any_other_exception_is_a_logged_500(caplog: pytest.LogCaptureFixt
 
 async def test_a_header_outside_latin1_is_a_logged_500(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.ERROR, logger="matchapi"):
-        status, _, _ = await call_asgi(app(lambda req: (302, None, {"location": "/привет"})), "GET", "/")
+        status, _, _ = await call_rsgi(app(lambda req: (302, None, {"location": "/привет"})), "GET", "/")
     assert status == 500
     assert "location" in caplog.text
 
@@ -248,7 +296,7 @@ async def test_a_header_outside_latin1_is_a_logged_500(caplog: pytest.LogCapture
 @pytest.mark.parametrize("value", [object(), True, (1, 2, 3, 4), ("200", "x")])
 async def test_an_unsupported_return_value_is_a_500(value: object, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.ERROR, logger="matchapi"):
-        status, _, _ = await call_asgi(app(lambda req: value), "GET", "/")
+        status, _, _ = await call_rsgi(app(lambda req: value), "GET", "/")
     assert status == 500
     assert "TypeError" in caplog.text
 
@@ -256,19 +304,19 @@ async def test_an_unsupported_return_value_is_a_500(value: object, caplog: pytes
 # Sync and async handlers
 
 
-async def test_a_sync_handler_runs_in_a_thread_under_asgi() -> None:
+async def test_a_sync_handler_runs_in_a_thread() -> None:
     def handle(req: Request) -> object:
         return {"thread": threading.get_ident()}
 
-    _, _, body = await call_asgi(app(handle), "GET", "/")
+    _, _, body = await call_rsgi(app(handle), "GET", "/")
     assert json.loads(body)["thread"] != threading.get_ident()
 
 
-async def test_an_async_handler_runs_in_the_loop_under_asgi() -> None:
+async def test_an_async_handler_runs_in_the_loop() -> None:
     async def handle(req: Request) -> object:
         return {"thread": threading.get_ident()}
 
-    _, _, body = await call_asgi(app(handle), "GET", "/")
+    _, _, body = await call_rsgi(app(handle), "GET", "/")
     assert json.loads(body)["thread"] == threading.get_ident()
 
 
@@ -285,9 +333,10 @@ async def test_any_callable_that_returns_an_awaitable_works() -> None:
         (Handler(), b"called"),
     ]
     for handler, expected in cases:
-        _, _, body = await call_asgi(app(handler), "GET", "/")
+        served = app(handler)
+        _, _, body = await call_rsgi(served, "GET", "/")
         assert body == expected
-        _, _, body = await call_asgi(app(handler), "GET", "/")  # the second call takes the remembered path
+        _, _, body = await call_rsgi(served, "GET", "/")  # the second call takes the remembered path
         assert body == expected
 
 
@@ -299,53 +348,34 @@ async def test_a_handler_that_sometimes_returns_a_coroutine() -> None:
         return allowed(req) if "authorization" in req.headers else 401
 
     served = app(handle)
-    assert (await call_asgi(served, "GET", "/", headers=[(b"authorization", b"x")]))[2] == b"allowed"
-    assert (await call_asgi(served, "GET", "/"))[0] == 401
-    assert (await call_asgi(served, "GET", "/", headers=[(b"authorization", b"x")]))[2] == b"allowed"
+    assert (await call_rsgi(served, "GET", "/", headers=[("authorization", "x")]))[2] == b"allowed"
+    assert (await call_rsgi(served, "GET", "/"))[0] == 401
+    assert (await call_rsgi(served, "GET", "/", headers=[("authorization", "x")]))[2] == b"allowed"
 
 
-# ASGI
+# RSGI
 
 
-async def test_asgi_request_fields() -> None:
+async def test_rsgi_request_fields() -> None:
     seen: list[Request] = []
 
     def handle(req: Request) -> object:
         seen.append(req)
         return None
 
-    await call_asgi(
+    await call_rsgi(
         app(handle),
         "POST",
         "/users/42",
-        query=b"q=x&limit=5",
-        headers=[(b"X-Token", b"t"), (b"content-type", b"application/json")],
-        chunks=[b'{"name":', b' "ann"}'],
+        query="q=x&limit=5",
+        headers=[("x-token", "t"), ("content-type", "application/json"), ("x-token", "u")],
+        body=b'{"name": "ann"}',
     )
     (req,) = seen
     assert req.route == ("POST", "users", "42")
     assert req.query == {"q": "x", "limit": "5"}
-    assert req.headers == {"x-token": "t", "content-type": "application/json"}
+    assert req.headers == {"x-token": "u", "content-type": "application/json"}  # a repeated header: last value wins
     assert req.json() == {"name": "ann"}
-
-
-async def test_asgi_lifespan_completes() -> None:
-    receive, send, sent = channel({"type": "lifespan.startup"}, {"type": "lifespan.shutdown"})
-    await app(lambda req: None)({"type": "lifespan"}, receive, send)
-    assert sent == [{"type": "lifespan.startup.complete"}, {"type": "lifespan.shutdown.complete"}]
-
-
-async def test_asgi_websocket_is_closed() -> None:
-    receive, send, sent = channel({"type": "websocket.connect"})
-    await app(lambda req: None)({"type": "websocket", "path": "/"}, receive, send)
-    assert sent == [{"type": "websocket.close"}]
-    await app(lambda req: None)({"type": "http.something.new"}, receive, send)
-    assert sent == [{"type": "websocket.close"}]
-
-
-def test_the_app_is_recognised_as_asgi3() -> None:
-    # uvicorn and hypercorn wrap an app as ASGI2 unless its __call__ is a coroutine function
-    assert inspect.iscoroutinefunction(app(lambda req: None).__call__)
 
 
 def test_the_readme_app_is_the_tested_sample() -> None:
@@ -354,122 +384,13 @@ def test_the_readme_app_is_the_tested_sample() -> None:
     assert block == (Path(__file__).resolve().parent / "sample.py").read_text()
 
 
-# The command
-
-
-@pytest.fixture
-def modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[str, str], str]:
-    monkeypatch.setattr(sys, "path", list(sys.path))  # the command adds the working directory; restore after
-    monkeypatch.chdir(tmp_path)
-
-    def write(name: str, source: str) -> str:
-        (tmp_path / f"{name}.py").write_text(source)
-        monkeypatch.delitem(sys.modules, name, raising=False)
-        return name
-
-    return write
-
-
-@pytest.fixture
-def uvicorn_run(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, dict[str, Any]]]:
-    import uvicorn
-
-    calls: list[tuple[Any, dict[str, Any]]] = []
-    monkeypatch.setattr(uvicorn, "run", lambda target, **kwargs: calls.append((target, kwargs)))
-    return calls
-
-
-def test_the_command_serves_handle_of_the_module(
-    modules: Callable[[str, str], str], uvicorn_run: list[tuple[Any, dict[str, Any]]]
-) -> None:
-    name = modules("svc", "def handle(req):\n    return 'ok'\n\ndef other(req):\n    return 'no'\n")
-    assert os.getcwd() not in sys.path
-    matchapi.main([name])
-    assert sys.path[0] == os.getcwd()  # the module is found in the working directory, like `python -m`
-    matchapi.main([name])
-    assert sys.path.count(os.getcwd()) == 1
-    (target, kwargs), _ = uvicorn_run
-    assert isinstance(target, matchapi.App)
-    assert target.handler is sys.modules[name].handle
-    assert kwargs == {"host": "127.0.0.1", "port": 8000}
-
-
-def test_the_command_takes_the_only_public_function(
-    modules: Callable[[str, str], str], uvicorn_run: list[tuple[Any, dict[str, Any]]]
-) -> None:
-    name = modules("only", "import json\n\ndef _private(req): ...\n\ndef serve(req):\n    return json.dumps({})\n")
-    matchapi.main([name, "--host", "0.0.0.0", "--port", "9000"])  # noqa: S104
-    ((target, kwargs),) = uvicorn_run
-    assert target.handler is sys.modules[name].serve
-    assert kwargs == {"host": "0.0.0.0", "port": 9000}  # noqa: S104
-
-
-def test_the_command_takes_module_colon_function(
-    modules: Callable[[str, str], str], uvicorn_run: list[tuple[Any, dict[str, Any]]]
-) -> None:
-    name = modules("two", "def a(req): ...\n\ndef b(req): ...\n")
-    matchapi.main([f"{name}:b"])
-    ((target, _),) = uvicorn_run
-    assert target.handler is sys.modules[name].b
-
-
-@pytest.mark.parametrize(
-    ("source", "target", "message"),
-    [
-        ("def a(req): ...\n\ndef b(req): ...\n", "", "has no `handle` and several public functions: a, b"),
-        ("x = 1\n", "", "has no public function to serve"),
-        ("def a(req): ...\n", ":missing", "has no `missing`"),
-        ("def a(req): ...\n\nhandle = 3\n", "", "`handle` is not callable"),
-    ],
-)
-def test_the_command_explains_a_missing_handler(
-    modules: Callable[[str, str], str], uvicorn_run: list[Any], source: str, target: str, message: str
-) -> None:
-    name = modules("bad", source)
-    with pytest.raises(SystemExit) as error:
-        matchapi.main([name + target])
-    assert message in str(error.value)
-    assert uvicorn_run == []
-
-
-def test_the_command_explains_a_missing_module(modules: Callable[[str, str], str], uvicorn_run: list[Any]) -> None:
-    with pytest.raises(SystemExit, match="No module named 'nowhere'"):
-        matchapi.main(["nowhere"])
-    with pytest.raises(SystemExit, match=r"No module named 'nowhere'.*drop the \.py"):
-        matchapi.main(["nowhere.py"])
-    with pytest.raises(SystemExit, match="module:function"):
-        matchapi.main([":handle"])
-
-
-def test_an_import_error_inside_the_module_is_the_users_traceback(
-    modules: Callable[[str, str], str], uvicorn_run: list[Any]
-) -> None:
-    name = modules("needs", "import no_such_library\n\ndef handle(req): ...\n")
-    with pytest.raises(ModuleNotFoundError, match="no_such_library"):
-        matchapi.main([name])
-
-
-def test_workers_and_reload_go_through_a_factory(
-    modules: Callable[[str, str], str], uvicorn_run: list[tuple[Any, dict[str, Any]]]
-) -> None:
-    name = modules("multi", "def handle(req):\n    return 'ok'\n")
-    matchapi.main([name, "--workers", "2", "--reload"])
-    ((target, kwargs),) = uvicorn_run
-    assert isinstance(target, str)
-    assert kwargs == {"host": "127.0.0.1", "port": 8000, "workers": 2, "reload": True, "factory": True}
-    module_name, _, attribute = target.partition(":")
-    built = getattr(sys.modules[module_name], attribute)()
-    assert isinstance(built, matchapi.App)
-    assert built.handler is sys.modules[name].handle
-
-
-def test_the_command_serves_over_http() -> None:
+def test_granian_serves_the_sample_over_http() -> None:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     root = Path(__file__).resolve().parent.parent
     process = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-m", "matchapi", "tests.sample", "--port", str(port)],
+        [sys.executable, "-m", "granian", "--interface", "rsgi", "tests.sample:handle", "--port", str(port)],
         cwd=root,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

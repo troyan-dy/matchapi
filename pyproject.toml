@@ -1,6 +1,6 @@
 [project]
 name = "matchapi"
-version = "0.1.0"
+version = "0.2.0"
 description = "An HTTP service is one function: match replaces the router"
 readme = "README.md"
 license = "MIT"
@@ -8,9 +8,9 @@ license-files = ["LICENSE"]
 authors = [{ name = "Dmitriy Troyan" }]
 requires-python = ">=3.11"
 dependencies = [
-  "uvicorn>=0.30",
+    "granian>=2.8",
 ]
-keywords = ["http", "asgi", "web", "framework", "match", "pattern-matching", "microservice", "webhook"]
+keywords = ["http", "rsgi", "granian", "web", "framework", "match", "pattern-matching", "microservice", "webhook"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Framework :: AsyncIO",
@@ -33,9 +33,6 @@ Repository = "https://github.com/troyan-dy/matchapi"
 Issues = "https://github.com/troyan-dy/matchapi/issues"
 Changelog = "https://github.com/troyan-dy/matchapi/blob/master/CHANGELOG.md"
 
-[project.scripts]
-matchapi = "matchapi:main"
-
 [dependency-groups]
 dev = [
   "mypy>=1.13",
@@ -50,7 +47,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "docs", "CHANGELOG.md", "README.md", "LICENSE"]
+include = ["src", "tests", "docs", "bench", "CHANGELOG.md", "CONTEXT.md", "README.md", "LICENSE"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/matchapi"]
@@ -68,7 +65,7 @@ files = ["src", "tests"]
 strict = true
 
 [[tool.mypy.overrides]]
-# The app of the README, verbatim: it imports nothing and has no annotations
+# The app of the README, verbatim: it has no annotations
 module = "sample"
 disallow_untyped_defs = false
 
@@ -80,8 +77,6 @@ testpaths = ["tests"]
 [tool.coverage.run]
 source = ["matchapi"]
 branch = true
-# `python -m matchapi` runs in the subprocess of tests/test_matchapi.py::test_the_command_serves_over_http
-omit = ["*/__main__.py"]
 
 [tool.coverage.report]
 show_missing = true
