@@ -6,6 +6,40 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-24
+
+Tooling and a refactor; the behavior and the public API are unchanged.
+
+### Changed
+
+- The code passes wemake-python-styleguide with no violations. `respond()` splits into the rules for a tuple and
+  for any other value, `App.__rsgi__` into reading, calling and streaming; constants name the statuses. The
+  exceptions are listed in `setup.cfg` with their reasons: the one-file core (AGENTS.md), `__all__`,
+  `respond(value)`, `app(handler)` and `App.handler` as public names, the exact `int` check that keeps `True` from
+  being a status, and `tests/sample.py` as the README's app.
+- A `str`, `dict` or `list` subclass, alone or after a status, takes the same short way to granian as the type
+  itself; the bytes on the wire are the same, and granian sets `content-length`.
+- `TEXT_HEADERS` and `JSON_HEADERS`, the headers granian gets for a `str` or JSON return value, are tuples
+  instead of shared lists. The bare RSGI application of `bench/` does the same.
+- The tests use module-level handlers and a `Recorder` instead of functions and classes defined inside each
+  test; the end-to-end test gets the granian server from a fixture. Each check is the same; the test of
+  callables that return an awaitable is parametrized, so the suite counts 64 tests.
+- `bench/run.py` keeps the measuring and the table; the servers and their processes move to
+  `bench/servers.py`. `bench/chart.py` draws the same `docs/bench.svg`, byte for byte.
+
+- `uv.lock` is regenerated: granian 2.8.5, Ruff 0.17.2, coverage 7.17. The dev group requires the current
+  majors (mypy 2.4, pytest 9.1, pytest-asyncio 1.4, pytest-cov 7.1, Ruff 0.17) and the build hatchling 1.32.
+- CI and the release use `actions/checkout@v7`, `astral-sh/setup-uv@v7`, `actions/upload-artifact@v7` and
+  `actions/download-artifact@v8`.
+
+### Added
+
+- wemake-python-styleguide 1.8 in the dev group, run as `uv run flake8 .` and configured in `setup.cfg`
+  (`select = WPS`, line length 120 as in Ruff), in CI's lint job and in AGENTS.md's checks. Ruff knows the
+  `WPS` codes as external, so a `# noqa: WPS...` is not reported as unused.
+- `.claude/settings.json` and `.claude/hooks/session-start.sh`: a Claude Code cloud session runs `uv sync` on
+  start, so the tests, Ruff and mypy run at once.
+
 ## [0.3.0] - 2026-10-12
 
 A request pays for what the handler reads. On HTTP/1.1 matchapi serves as many requests as a bare RSGI
@@ -76,7 +110,8 @@ the handler contract, the request and the response rules are unchanged.
 - The `matchapi` command: `matchapi app` serves the module's `handle` with uvicorn; `--host`, `--port`,
   `--workers`, `--reload`.
 
-[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/troyan-dy/matchapi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/troyan-dy/matchapi/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/troyan-dy/matchapi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/troyan-dy/matchapi/compare/v0.1.0...v0.2.0

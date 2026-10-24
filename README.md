@@ -6,9 +6,10 @@
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/troyan-dy/matchapi/blob/master/README.md#development)
 [![mypy](https://img.shields.io/badge/mypy-strict-blue)](https://mypy.readthedocs.io/en/stable/command_line.html#cmdoption-mypy-strict)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![wemake-python-styleguide](https://img.shields.io/badge/style-wemake-000000.svg)](https://github.com/wemake-services/wemake-python-styleguide)
 [![HTTP/1.1](https://img.shields.io/badge/HTTP%2F1.1-at%20the%20RSGI%20ceiling-2a78d6)](https://github.com/troyan-dy/matchapi/blob/master/README.md#performance)
 [![Dependencies](https://img.shields.io/badge/dependencies-granian-orange)](https://github.com/emmett-framework/granian)
-[![One file](https://img.shields.io/badge/one%20file-~300%20lines-informational)](https://github.com/troyan-dy/matchapi/blob/master/src/matchapi/__init__.py)
+[![One file](https://img.shields.io/badge/one%20file-~350%20lines-informational)](https://github.com/troyan-dy/matchapi/blob/master/src/matchapi/__init__.py)
 [![License](https://img.shields.io/pypi/l/matchapi)](LICENSE)
 
 An HTTP service is one function. `match` replaces the router.
@@ -20,7 +21,7 @@ interface: no router, no middleware, no ASGI adapter. Python 3.11+.
 - **Fast.** On HTTP/1.1 within a few percent of a bare RSGI application written by hand, and 1.16 to 3.1 times
   the requests per second of Emmett, BlackSheep, Starlette, Litestar and FastAPI under the same granian.
   [Performance](#performance).
-- **Small.** One file of about 300 lines that reads in half an hour, pure Python, one dependency: granian.
+- **Small.** One file of about 350 lines that reads in half an hour, pure Python, one dependency: granian.
 - **Tested.** 100% line and branch coverage, `mypy --strict`, a real granian in the test suite.
 
 ```python
@@ -332,7 +333,7 @@ cookies or sessions, no templates, no static files, no websockets, no streaming 
 Each of these is either a few lines in the handler or not matchapi's job: the server is granian and the only
 interface is RSGI, so there is no middleware layer to plug into.
 
-The line is deliberate. The framework fits in one file of about 300 lines that reads in half an hour, and the
+The line is deliberate. The framework fits in one file of about 350 lines that reads in half an hour, and the
 handler stays a function that works without a server.
 
 ## Design notes
@@ -347,8 +348,10 @@ glossary. [bench/](bench/) measures matchapi against a bare RSGI application and
 ```console
 $ uv sync
 $ uv run pytest --cov
-$ uv run ruff check . && uv run ruff format --check . && uv run mypy
+$ uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run flake8 .
 ```
 
-Coverage is kept at 100%. A pull request bumps the version in `pyproject.toml` and adds a `CHANGELOG.md` entry;
-a merge into `master` publishes that version to PyPI and tags it.
+Coverage is kept at 100%. `flake8` runs
+[wemake-python-styleguide](https://wemake-python-styleguide.readthedocs.io/) with the exceptions in `setup.cfg`.
+A pull request bumps the version in `pyproject.toml` and adds a `CHANGELOG.md` entry; a merge into `master`
+publishes that version to PyPI and tags it.

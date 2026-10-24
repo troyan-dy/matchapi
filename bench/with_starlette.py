@@ -4,6 +4,8 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
+CREATED = 201
+
 
 async def ping(request):
     return PlainTextResponse("pong")
@@ -15,7 +17,7 @@ async def user(request):
 
 async def create(request):
     body = await request.json()
-    return JSONResponse({"id": 7, "name": body["name"]}, status_code=201)
+    return JSONResponse({"id": 7, "name": body["name"]}, status_code=CREATED)
 
 
 app = Starlette(
