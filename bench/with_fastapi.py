@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+CREATED = 201
 app = FastAPI()
 
 
@@ -21,6 +22,6 @@ async def user(user_id: int):
     return {"id": user_id, "name": "ann"}
 
 
-@app.post("/users", status_code=201)
+@app.post("/users", status_code=CREATED)
 async def create(body: NewUser):
     return {"id": 7, "name": body.name}

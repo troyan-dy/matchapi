@@ -7,76 +7,53 @@ measured against; light and dark from the viewer's color scheme.
 """
 
 import re
+from collections import defaultdict
 from html import escape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FRAMEWORKS = ["matchapi", "Emmett", "BlackSheep", "Starlette", "Litestar", "FastAPI"]
-PANELS = ["GET /users/42", "POST /users"]
+README = ROOT / "bench" / "README.md"
+HTTP1_SECTION = re.compile(r"### HTTP/1\.1(.*?)### HTTP/2", re.DOTALL)
+TABLE_ROW = re.compile(r"^\| ([^|]+) \| `([^`]+)` \| (\d+) \|", re.MULTILINE)  # the thousands commas removed
+MATCHAPI = "matchapi"
+CEILING = "bare RSGI"
+FRAMEWORKS = (MATCHAPI, "Emmett", "BlackSheep", "Starlette", "Litestar", "FastAPI")
+PANELS = ("GET /users/42", "POST /users")
 
-WIDTH, PANEL, GAP, LABEL, ROW, BAR, TOP = 880, 420, 40, 96, 30, 18, 78
+WIDTH = 880
+PANEL = 420  # one panel, the names included
+GAP = 40  # between the panels
+LABEL = 96  # left of a panel's axis, for the names
+VALUE_ROOM = 64  # right of the longest bar, for its value
+INNER = PANEL - LABEL - VALUE_ROOM  # the bars
+ROW = 30
+BAR_HEIGHT = 18
+TOP = 78  # the first row
+BOTTOM = 62  # below the last row: the tick labels and the source line
 SCALE = 50_000  # one x-scale for both panels
+TICK = 10_000
+RADIUS = 4.0  # the round data end of a bar
+BASELINE = 4.5  # from the middle of a bar down to the baseline of its labels
+HEAD_RISE = 30
+CEILING_RISE = 12
+MARK_RISE = 16
+TICK_DROP = 16
+SOURCE_RISE = 12
 FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif"
 SOURCE = "bench/README.md · Python 3.14, granian 2.8.4, oha with 64 connections · higher is better"
 
-
-def table() -> dict[tuple[str, str], float]:
-    """`(server, request) -> requests/s` from the HTTP/1.1 section."""
-    text = (ROOT / "bench" / "README.md").read_text().split("### HTTP/1.1", 1)[1].split("### HTTP/2", 1)[0]
-    rows = re.findall(r"^\| ([^|]+) \| `([^`]+)` \| ([\d,]+) \|", text, re.MULTILINE)
-    return {(server.strip(), request): float(rps.replace(",", "")) for server, request, rps in rows}
-
-
-def name(server: str) -> str:
-    """`Emmett 2.8 (RSGI)` is `Emmett`; `matchapi 0.2.1`, the previous release, is not on the chart."""
-    if server in ("bare RSGI", "matchapi"):
-        return server
-    return "" if server.startswith("matchapi ") else server.split(" ")[0]
-
-
-def bar(x: float, y: float, width: float) -> str:
-    """Square at the baseline, 4px round at the data end."""
-    r = min(4.0, width / 2)
-    return (
-        f"M{x:.1f},{y:.1f}h{width - r:.1f}a{r},{r} 0 0 1 {r},{r}v{BAR - 2 * r:.1f}"
-        f"a{r},{r} 0 0 1 {-r},{r}h{-(width - r):.1f}z"
-    )
-
-
-def panel(data: dict[tuple[str, str], float], request: str, left: float) -> list[str]:
-    plot, inner = left + LABEL, PANEL - LABEL - 64
-    servers = {name(server): rps for (server, req), rps in data.items() if req == request}
-    ceiling = servers["bare RSGI"]
-    rows = sorted((rps, framework) for framework, rps in servers.items() if framework in FRAMEWORKS)[::-1]
-    height = len(rows) * ROW
-    out = [f'<text class="head" x="{left}" y="{TOP - 30}">{escape(request)}</text>']
-    for tick in range(0, SCALE + 1, 10_000):
-        x = plot + inner * tick / SCALE
-        out.append(f'<line class="grid" x1="{x:.1f}" x2="{x:.1f}" y1="{TOP - 6}" y2="{TOP + height}"/>')
-        out.append(f'<text class="tick" x="{x:.1f}" y="{TOP + height + 16}">{tick // 1000}k</text>')
-    for i, (rps, framework) in enumerate(rows):
-        y = TOP + i * ROW + (ROW - BAR) / 2
-        width = inner * rps / SCALE
-        kind = "accent" if framework == "matchapi" else "other"
-        out.append(f'<text class="name {kind}" x="{plot - 10}" y="{y + BAR / 2 + 4.5}">{framework}</text>')
-        out.append(
-            f'<path class="bar {kind}" d="{bar(plot, y, width)}"><title>{framework}: {rps:,.0f} req/s</title></path>'
-        )
-        out.append(f'<text class="value {kind}" x="{plot + width + 6:.1f}" y="{y + BAR / 2 + 4.5}">{rps:,.0f}</text>')
-    x = plot + inner * ceiling / SCALE
-    out.append(f'<line class="ceiling" x1="{x:.1f}" x2="{x:.1f}" y1="{TOP - 12}" y2="{TOP + height}"/>')
-    out.append(f'<text class="mark" x="{x:.1f}" y="{TOP - 16}">bare RSGI {ceiling:,.0f}</text>')
-    out.append(f'<line class="axis" x1="{plot}" x2="{plot}" y1="{TOP - 6}" y2="{TOP + height}"/>')
-    return out
-
-
-def main() -> None:
-    data = table()
-    height = TOP + len(FRAMEWORKS) * ROW + 62
-    body = [line for i, request in enumerate(PANELS) for line in panel(data, request, i * (PANEL + GAP))]
-    get, post = data["matchapi", "GET /users/42"], data["matchapi", "POST /users"]
-    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}"
-  viewBox="-10 0 {WIDTH} {height}" role="img" aria-labelledby="t d" font-family="{FONT}">
+BAR_PATH = "M{x:.1f},{y:.1f}h{straight:.1f}a{r},{r} 0 0 1 {r},{r}v{side:.1f}a{r},{r} 0 0 1 {back},{r}h{return_:.1f}z"
+HEAD_TAG = '<text class="head" x="{x}" y="{y}">{request}</text>'
+GRID_TAG = '<line class="grid" x1="{x:.1f}" x2="{x:.1f}" y1="{top}" y2="{bottom}"/>'
+TICK_TAG = '<text class="tick" x="{x:.1f}" y="{y}">{thousands}k</text>'
+NAME_TAG = '<text class="name {kind}" x="{x}" y="{y}">{framework}</text>'
+BAR_TAG = '<path class="bar {kind}" d="{path}"><title>{framework}: {rps:,.0f} req/s</title></path>'
+VALUE_TAG = '<text class="value {kind}" x="{x:.1f}" y="{y}">{rps:,.0f}</text>'
+CEILING_TAG = '<line class="ceiling" x1="{x:.1f}" x2="{x:.1f}" y1="{top}" y2="{bottom}"/>'
+MARK_TAG = '<text class="mark" x="{x:.1f}" y="{y}">bare RSGI {rps:,.0f}</text>'
+AXIS_TAG = '<line class="axis" x1="{x}" x2="{x}" y1="{top}" y2="{bottom}"/>'
+DOCUMENT = """<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"
+  viewBox="-10 0 {width} {height}" role="img" aria-labelledby="t d" font-family="{font}">
 <title id="t">Requests per second over HTTP/1.1, one granian worker</title>
 <desc id="d">matchapi serves {get:,.0f} GET and {post:,.0f} POST requests per second, level with a bare RSGI
 application and ahead of Emmett, BlackSheep, Starlette, Litestar and FastAPI under the same granian.</desc>
@@ -102,14 +79,170 @@ application and ahead of Emmett, BlackSheep, Starlette, Litestar and FastAPI und
   .ceiling {{ stroke: var(--ink-2); stroke-width: 1.5; }}
   .mark {{ fill: var(--ink-2); font-size: 11px; text-anchor: end; }}
 </style>
-<rect class="bg" x="-10" width="{WIDTH}" height="{height}" rx="8"/>
+<rect class="bg" x="-10" width="{width}" height="{height}" rx="8"/>
 <text class="title" x="0" y="22">Requests per second, HTTP/1.1, one granian worker</text>
 <g>
-{chr(10).join(body)}
+{bars}
 </g>
-<text class="sub" x="0" y="{height - 12}">{SOURCE}</text>
+<text class="sub" x="0" y="{source_y}">{source}</text>
 </svg>
 """
+
+
+def table() -> dict[str, dict[str, float]]:
+    """`request -> name -> requests/s` from the HTTP/1.1 section, each server named as on the chart."""
+    section = HTTP1_SECTION.search(README.read_text())[1]
+    rates: dict[str, dict[str, float]] = defaultdict(dict)
+    for server, request, rps in TABLE_ROW.findall(section.replace(",", "")):
+        rates[request][name(server.strip())] = float(rps)
+    return rates
+
+
+def name(server: str) -> str:
+    """`Emmett 2.8 (RSGI)` is `Emmett`; `matchapi 0.2.1`, the previous release, is not on the chart."""
+    if server in (CEILING, MATCHAPI):
+        return server
+    return "" if server.startswith("matchapi ") else server.split(" ")[0]
+
+
+def bar_path(left: float, top: float, width: float) -> str:
+    """Square at the baseline, 4px round at the data end."""
+    radius = min(RADIUS, width / 2)
+    return BAR_PATH.format(
+        x=left,
+        y=top,
+        straight=width - radius,
+        r=radius,
+        side=BAR_HEIGHT - 2 * radius,
+        back=-radius,
+        return_=-(width - radius),
+    )
+
+
+class Panel:
+    """One request: the frameworks from the fastest down, and the bare RSGI application as a line."""
+
+    def __init__(self, request: str, servers: dict[str, float], left: int) -> None:
+        self.request = request
+        self.left = left
+        self.axis = left + LABEL
+        self.ceiling = servers[CEILING]
+        self.ranked = sorted(
+            ((servers[framework], framework) for framework in FRAMEWORKS),
+            reverse=True,
+        )
+        self.bottom = TOP + len(self.ranked) * ROW
+
+    def elements(self) -> list[str]:
+        """The head, the grid, a bar per framework, the bare RSGI line and the axis."""
+        elements = [self._head(), *self._grid()]
+        for index, (rps, framework) in enumerate(self.ranked):
+            elements.extend(self._framework_row(index, rps, framework))
+        elements.extend(self._closing())
+        return elements
+
+    def _position(self, rps: float) -> float:
+        return self.axis + INNER * rps / SCALE
+
+    def _head(self) -> str:
+        return HEAD_TAG.format(
+            x=self.left,
+            y=TOP - HEAD_RISE,
+            request=escape(self.request),
+        )
+
+    def _grid(self) -> list[str]:
+        """A grid line and a label every `TICK` requests per second."""
+        elements = []
+        for tick in range(0, SCALE + 1, TICK):
+            position = self._position(tick)
+            elements.append(
+                GRID_TAG.format(
+                    x=position,
+                    top=TOP - 6,
+                    bottom=self.bottom,
+                ),
+            )
+            elements.append(
+                TICK_TAG.format(
+                    x=position,
+                    y=self.bottom + TICK_DROP,
+                    thousands=tick // 1000,
+                ),
+            )
+        return elements
+
+    def _framework_row(self, index: int, rps: float, framework: str) -> list[str]:
+        """The name, the bar and the value of one framework."""
+        top = TOP + index * ROW + (ROW - BAR_HEIGHT) / 2
+        width = INNER * rps / SCALE
+        kind = "accent" if framework == MATCHAPI else "other"
+        baseline = top + BAR_HEIGHT / 2 + BASELINE
+        return [
+            NAME_TAG.format(
+                kind=kind,
+                x=self.axis - 10,
+                y=baseline,
+                framework=framework,
+            ),
+            BAR_TAG.format(
+                kind=kind,
+                path=bar_path(self.axis, top, width),
+                framework=framework,
+                rps=rps,
+            ),
+            VALUE_TAG.format(
+                kind=kind,
+                x=self.axis + width + 6,
+                y=baseline,
+                rps=rps,
+            ),
+        ]
+
+    def _closing(self) -> list[str]:
+        """The bare RSGI line with its mark, and the axis over the bars' start."""
+        ceiling = self._position(self.ceiling)
+        return [
+            CEILING_TAG.format(
+                x=ceiling,
+                top=TOP - CEILING_RISE,
+                bottom=self.bottom,
+            ),
+            MARK_TAG.format(
+                x=ceiling,
+                y=TOP - MARK_RISE,
+                rps=self.ceiling,
+            ),
+            AXIS_TAG.format(
+                x=self.axis,
+                top=TOP - 6,
+                bottom=self.bottom,
+            ),
+        ]
+
+
+def drawing(rates: dict[str, dict[str, float]]) -> str:
+    """The panels side by side."""
+    elements = []
+    for index, request in enumerate(PANELS):
+        panel = Panel(request, rates[request], index * (PANEL + GAP))
+        elements.extend(panel.elements())
+    return "\n".join(elements)
+
+
+def main() -> None:
+    rates = table()
+    height = TOP + len(FRAMEWORKS) * ROW + BOTTOM
+    svg = DOCUMENT.format(
+        width=WIDTH,
+        height=height,
+        font=FONT,
+        get=rates["GET /users/42"][MATCHAPI],
+        post=rates["POST /users"][MATCHAPI],
+        bars=drawing(rates),
+        source_y=height - SOURCE_RISE,
+        source=SOURCE,
+    )
     (ROOT / "docs" / "bench.svg").write_text(svg)
 
 

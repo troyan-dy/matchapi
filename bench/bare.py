@@ -5,21 +5,24 @@ It reads the request body only for the route that has one, as a hand-written app
 
 import json
 
-TEXT = [("content-type", "text/plain; charset=utf-8")]
-JSON = [("content-type", "application/json")]
+TEXT = (("content-type", "text/plain; charset=utf-8"),)
+JSON = (("content-type", "application/json"),)
+OK = 200
+CREATED = 201
+NOT_FOUND = 404
 
 
 async def answer(scope, protocol, body):
     if scope.method == "GET" and scope.path == "/ping":
-        protocol.response_str(200, TEXT, "pong")
+        protocol.response_str(OK, TEXT, "pong")
     elif scope.method == "GET" and scope.path.startswith("/users/"):
         user = {"id": int(scope.path[7:]), "name": "ann"}
-        protocol.response_str(200, JSON, json.dumps(user, separators=(",", ":")))
+        protocol.response_str(OK, JSON, json.dumps(user, separators=(",", ":")))
     elif scope.method == "POST" and scope.path == "/users":
         user = {"id": 7, "name": json.loads(body)["name"]}
-        protocol.response_str(201, JSON, json.dumps(user, separators=(",", ":")))
+        protocol.response_str(CREATED, JSON, json.dumps(user, separators=(",", ":")))
     else:
-        protocol.response_str(404, TEXT, "Not Found")
+        protocol.response_str(NOT_FOUND, TEXT, "Not Found")
 
 
 async def app(scope, protocol):

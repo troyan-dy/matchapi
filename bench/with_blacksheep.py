@@ -2,6 +2,7 @@
 
 from blacksheep import Application, FromJSON, json, text
 
+CREATED = 201
 app = Application()
 
 
@@ -17,4 +18,4 @@ async def user(user_id: int):
 
 @app.router.post("/users")
 async def create(body: FromJSON[dict]):
-    return json({"id": 7, "name": body.value["name"]}, status=201)
+    return json({"id": 7, "name": body.value["name"]}, status=CREATED)

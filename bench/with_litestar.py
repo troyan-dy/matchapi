@@ -14,7 +14,7 @@ async def user(user_id: int) -> dict:
 
 
 @post("/users")
-async def create(data: dict) -> dict:
+async def create(data: dict) -> dict:  # noqa: WPS110 -- Litestar passes the request body as `data`
     return {"id": 7, "name": data["name"]}
 
 
