@@ -16,10 +16,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # the tags tell which versions are released
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
       - id: version
         name: Check that the version is not released yet
         run: |
@@ -31,7 +31,7 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest --cov
       - run: uv build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -45,7 +45,7 @@ jobs:
     permissions:
       id-token: write  # PyPI Trusted Publishing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -62,7 +62,7 @@ jobs:
       VERSION: ${{ needs.build.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Tag the release and publish the notes from CHANGELOG.md
         run: |
           git config user.name "github-actions[bot]"
