@@ -6,6 +6,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-24
+
+Tooling only; the code is unchanged.
+
+### Changed
+
+- `uv.lock` is regenerated: granian 2.8.5, Ruff 0.17.2, coverage 7.17. The dev group requires the current
+  majors (mypy 2.4, pytest 9.1, pytest-asyncio 1.4, pytest-cov 7.1, Ruff 0.17) and the build hatchling 1.32.
+- CI and the release use `actions/checkout@v7`, `astral-sh/setup-uv@v7`, `actions/upload-artifact@v7` and
+  `actions/download-artifact@v8`.
+
+### Added
+
+- `.claude/settings.json` and `.claude/hooks/session-start.sh`: a Claude Code cloud session runs `uv sync` on
+  start, so the tests, Ruff and mypy run at once.
+
 ## [0.3.0] - 2026-10-12
 
 A request pays for what the handler reads. On HTTP/1.1 matchapi serves as many requests as a bare RSGI
@@ -76,7 +92,8 @@ the handler contract, the request and the response rules are unchanged.
 - The `matchapi` command: `matchapi app` serves the module's `handle` with uvicorn; `--host`, `--port`,
   `--workers`, `--reload`.
 
-[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/troyan-dy/matchapi/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/troyan-dy/matchapi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/troyan-dy/matchapi/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/troyan-dy/matchapi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/troyan-dy/matchapi/compare/v0.1.0...v0.2.0
