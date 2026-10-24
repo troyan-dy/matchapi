@@ -32,6 +32,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      - run: uv run flake8 .  # wemake-python-styleguide, configured in setup.cfg
 
   test:
     runs-on: ubuntu-latest

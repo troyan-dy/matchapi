@@ -21,7 +21,11 @@ matchapi is a one-file HTTP framework: an HTTP service is one function `handle(r
 
 - TDD: a failing test in `tests/test_matchapi.py` first, then the code. Coverage stays at 100%.
 - Checks before a commit: `uv run pytest --cov`, `uv run ruff check .`, `uv run ruff format --check .`,
-  `uv run mypy`.
+  `uv run mypy`, `uv run flake8 .`.
+- `flake8` runs wemake-python-styleguide alone (`select = WPS` in `setup.cfg`); Ruff formats and stays the base
+  linter. A violation is fixed in the code. An ignore is per file in `setup.cfg` or a `# noqa: WPS...` on the
+  line, with its reason, and only for a rule of this file (the one-file core), the public API or a framework's
+  convention.
 - Every pull request bumps the version in `pyproject.toml` and adds a `CHANGELOG.md` entry; a merge into `master`
   publishes to PyPI through `.github/workflows/release.yml`.
 - Documentation is in English; the README shows runnable code with the command and its real output.

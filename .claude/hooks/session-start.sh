@@ -1,5 +1,6 @@
 #!/bin/bash
-# A Claude Code cloud session starts with the dev environment in .venv: uv run pytest, ruff and mypy work at once
+# A Claude Code cloud session starts with the dev environment in .venv: uv run pytest, ruff, mypy and flake8
+# (wemake-python-styleguide) work at once; `uv sync` installs the dev group
 set -euo pipefail
 
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
